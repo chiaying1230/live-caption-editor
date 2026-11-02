@@ -9,7 +9,8 @@ if (-not (Test-Path -LiteralPath $python)) {
     & python -m venv .venv
     if ($LASTEXITCODE -ne 0) { throw 'Could not create .venv. Check your Python installation.' }
 }
-$dependencyHash = (Get-FileHash -LiteralPath (Join-Path $PSScriptRoot 'pyproject.toml') -Algorithm SHA256).Hash
+$dependencyHash = (& $python -c "from pathlib import Path; import hashlib; print(hashlib.sha256(Path('pyproject.toml').read_bytes()).hexdigest())").Trim()
+if ($LASTEXITCODE -ne 0) { throw 'Could not read project dependencies.' }
 $marker = Join-Path $PSScriptRoot '.venv\project-deps.sha256'
 if (-not (Test-Path -LiteralPath $marker) -or (Get-Content -LiteralPath $marker -Raw).Trim() -ne $dependencyHash) {
     & $python -m pip install -e .

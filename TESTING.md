@@ -18,6 +18,7 @@
 - **真實瀏覽器與模型整合通過**：以 WAV 測試檔代替瀏覽器麥克風，使用正式 AudioWorklet、WebSocket、faster-whisper、SQLite，看到暫定與已確認字幕；收音繼續時開啟編輯框，等待新音訊後草稿仍在，儲存變人工校正；Stop 完成後不留暫定段落；下載 JSON 確認鎖定欄位；重新整理後修改仍存在。
 - **版面與錯誤檢查通過**：1440 px 桌面與 390 px 手機截圖檢視；手機無水平溢出；上述流程無 JavaScript page error。
 - `pip check` 通過。
+- 已直接執行 Windows `start.cmd`；在 `PIP_NO_INDEX=1` 與 `HF_HUB_OFFLINE=1` 的離線設定下，使用既有安裝成功啟動預設 8000 服務。啟動雜湊計算使用 Python，避免依賴 Windows PowerShell 的額外 cmdlet。
 
 發現並修正：PyAV 19 的 `av.open` 不接受 faster-whisper 使用的 `metadata_errors` 參數，已限制 PyAV 15–16，並以 16.1.0 重新執行成功。
 
