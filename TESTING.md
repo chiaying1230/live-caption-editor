@@ -59,3 +59,48 @@ node tests/browser-smoke.cjs
 - **4 項 AudioWorklet 測試通過**。
 - 可用 `.\.venv\Scripts\python.exe tests/real-asr-smoke.py` 對獨立的 8001 測試服務執行公開 WAV → 真實模型的傳輸測試；不開啟實體麥克風，不修改既有場次。
 - 使用者實體麥克風的選取與音量，仍需在更新後的畫面確認，不能以公開 WAV 測試代替。
+
+## FunASR CPU 初步實測
+
+硬體：同一台 i7-1260P／16 GB Windows 筆電，使用獨立短路徑環境，Python 3.13.2、FunASR 1.4.19、PyTorch／torchaudio 2.10.0+cpu。未使用 GPU。套件 `pip check` 通過。
+
+選用模型與固定版本：
+
+- `funasr/paraformer-zh-streaming`：`apache-2.0-20260804`，模型權重 Apache 2.0。
+- `funasr/paraformer-zh`：`d7811ee3ac581fbcfdeb37c98c6ba674028433dc`；發布者模型卡標示 Apache 2.0。
+- `funasr/ct-punc`：`d0e55e2b8722a78b63705ff443d09c4f86e5d750`；發布者模型卡標示 Apache 2.0。
+- FunASR 工具套件本身為 MIT。模型不打包入 repository 或 ZIP。
+
+以 PaddleSpeech 約 5 秒中文音訊，以及 Paraformer 官方約 5.55 秒中文範例執行 FP32／4 執行緒／600 ms chunk：
+
+| 音訊長度 | 串流推論總時間 | 最慢單塊推論 | 句尾推論 |
+| --- | --- | --- | --- |
+| 5.00 秒 | 5.355 秒 | 0.771 秒 | 2.021 秒 |
+| 5.55 秒 | 4.930 秒 | 0.747 秒 | 1.816 秒 |
+
+兩例皆有完整中文輸出，先轉繁體後與可辨讀內容相符。時間不含模型下載與載入，不是端到端字幕延遲。樣本太少，不能據此推定臺灣口音或課堂品質。
+
+另外實測對所有 Linear 層做 PyTorch 動態 int8 量化：串流結果出現重複字，速度也未改善，**未採用此量化方式**。保留原精度推論。
+
+FP32 參數調整（同一份 5.00 秒公開錄音）：
+
+| 執行緒 | 音訊塊 | 串流推論總時間 | 最慢單塊 |
+| --- | --- | --- | --- |
+| 2 | 600 ms | 5.614 秒 | 0.808 秒 |
+| 4 | 1200 ms | 3.455 秒 | 0.907 秒 |
+| 8 | 1200 ms | 3.441 秒 | 0.795 秒 |
+| 4 | 1800 ms | 2.503 秒 | 0.911 秒 |
+
+四組文字相同，因此試用版預設 4 執行緒、1800 ms。它降低計算負擔，也會增加收集音訊所需的等待；不是低於一秒的字幕保證。模型首次載入與環境匯入約數十秒，不含於上表。
+
+目前 24 項 Python 測試、4 項 AudioWorklet 測試通過；包含 FunASR 600 ms 原生串流快照合併不漏音、場次快取隔離、句尾完整重新辨識、標點、WebSocket 中人工校正與鎖定。
+
+正式服務整合實測：使用 1800 ms 塊、三個真實模型，以及同一公開中文 WAV，走完整 WebSocket／AudioStream／SQLite 流程，通過即時接收統計、暫定文字、句尾校正、標點、Stop 與持久化檢查；最後輸出「我認為跑步最重要的就是給我帶來了身體健康。」測試沒有使用實體麥克風。
+
+可在 FunASR 環境重現模型計算測試：
+
+```powershell
+python tests/benchmark-funasr.py work/zh.wav --chunk-ms 1800 --output work/funasr-benchmark.json
+```
+
+這個腳本使用你明確指定的本機 16 kHz mono WAV，並將結果文字寫入指定 JSON。數字只代表模型計算時間，並非端到端字幕延遲。不要只憑兩份短樣本就取代課堂情境的實際評估。

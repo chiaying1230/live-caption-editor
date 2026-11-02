@@ -4,6 +4,8 @@ from pathlib import Path
 
 
 class WhisperEngine:
+    backend = "whisper"
+    label = "Whisper"
     def __init__(self):
         self.model = None
         self.lock = threading.Lock()
@@ -43,3 +45,13 @@ class WhisperEngine:
                 initial_prompt="以下是繁體中文逐字稿，請使用繁體中文與標點符號。",
             )
             return self.converter.convert("".join(s.text for s in segments).strip())
+
+
+def create_engine():
+    backend = os.getenv("ASR_BACKEND", "whisper").lower()
+    if backend == "funasr":
+        from .funasr_engine import FunASREngine
+        return FunASREngine()
+    if backend == "whisper":
+        return WhisperEngine()
+    raise ValueError("ASR_BACKEND must be whisper or funasr")

@@ -18,9 +18,12 @@ class Job:
 
 
 class AudioStream:
-    def __init__(self, store, sid, engine, send, *, threshold=0.003, silence_frames=8, max_frames=120):
+    def __init__(self, store, sid, engine, send, *, threshold=0.003, silence_frames=8, max_frames=None):
         self.store, self.sid, self.engine, self.send = store, sid, engine, send
-        self.threshold, self.silence_frames, self.max_frames = threshold, silence_frames, max_frames
+        self.threshold, self.silence_frames = threshold, silence_frames
+        self.max_frames = max_frames if max_frames is not None else getattr(engine, "max_frames", 120)
+        self.preview_frames = getattr(engine, "preview_frames", 12)
+        self.recognizer = engine.new_session() if hasattr(engine, "new_session") else None
         self.offset = store.offset(sid)
         self.frames = 0
         self.pre = deque(maxlen=2)
@@ -74,7 +77,7 @@ class AudioStream:
         end = self.offset + self.frames / 10
         if self.quiet >= self.silence_frames or len(self.active) >= self.max_frames:
             await self._finalize(end)
-        elif len(self.active) >= 12 and len(self.active) - self.last_preview >= 12:
+        elif len(self.active) >= self.preview_frames and len(self.active) - self.last_preview >= self.preview_frames:
             self.preview = Job(self.segid, np.concatenate(self.active), end, False)
             self.last_preview = len(self.active)
             self.wake.set()
@@ -112,7 +115,10 @@ class AudioStream:
                 try:
                     self.processing = True
                     await self.send({"type": "recognizing", "final": job.final})
-                    text = await asyncio.to_thread(self.engine.transcribe, job.audio)
+                    if self.recognizer is not None:
+                        text = await asyncio.to_thread(self.recognizer.recognize, job.segid, job.audio, job.final)
+                    else:
+                        text = await asyncio.to_thread(self.engine.transcribe, job.audio)
                     row = self.store.apply_asr(self.sid, job.segid, text, job.end, job.final)
                     await self.send({"type": "segment", "segment": row})
                 except Exception:

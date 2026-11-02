@@ -4,6 +4,24 @@
 
 第一版不接 Google Docs，不含說話者辨識、AI 摘要或雲端語音 API，不需要 API key。
 
+## FunASR／Paraformer CPU 試用版
+
+除了原本 Whisper，另提供 **Paraformer 串流辨識 → 句尾重新辨識 → 標點恢復 → 繁體轉換** 的本機試用路線。兩者共用字幕編輯與後端鎖定規則。此路線仍需用你的口音與課堂術語比較品質，不保證更準或能長時間跟上收音。
+
+1. 使用同樣的 64 位元 Python 3.11–3.13，在專案目錄雙擊 **`start-funasr.cmd`**。
+2. 開啟 **http://127.0.0.1:8001**，右上應顯示 `FunASR Paraformer 2pass · CPU`。
+3. 按開始收音，等候模型準備完成。首次需下載串流、句尾校正與標點三個模型，約 2 GB，之後使用本機快取。
+
+FunASR 使用獨立 Python 環境，預設位於 `%USERPROFILE%/Documents/Codex/work/live-caption-funasr`，以避免 PyTorch 安裝遇到 Windows 長路徑限制，也避免將套件裝進 OneDrive 重新導向的「文件」資料夾；不修改系統設定。可透過 `CAPTION_FUNASR_ENV` 指定其他短路徑。
+
+**8001 試用版使用 `data-funasr/` 獨立資料庫；原本的 Whisper 逐字稿仍在 8000 的 `data/`。** 先比較兩者效果，再決定是否切換；同一場測試請只用一個頁面收音。兩個啟動視窗關閉即可停止對應服務。
+
+模型快取在 `.cache/funasr/`，可用 `FUNASR_MODEL_DIR` 指定位置。原生串流保留每場獨立 cache，已處理的音訊不會因預覽更新而重送。句尾校正只會更新暫定段落，人工鎖定規則不變。
+
+預設使用 **1.8 秒音訊塊**，以降低此 CPU 的推論負擔；這不是 1.8 秒端到端延遲，還需加上模型推論與前瞻。可用 `FUNASR_CHUNK_MS=600`／`1200`／`1800` 調整。短塊通常較早更新，但這台筆電的 600 ms 實測無法留足兩階段處理餘裕。
+
+技術來源：[FunASR](https://github.com/modelscope/FunASR)、[Paraformer 串流模型](https://huggingface.co/funasr/paraformer-zh-streaming)。程式碼 MIT，選用模型的授權與固定版本見 [TESTING.md](TESTING.md)。
+
 ## Windows 快速開始
 
 1. 安裝 **64 位元 Python 3.11–3.13**（本機驗證版本：3.13.2），安裝時勾選 **Add Python to PATH**。建議先用 3.13。
@@ -66,6 +84,9 @@ $env:ASR_MODEL = 'small'  # tiny / base / small / medium / large-v3 / large-v3-t
 | `VOICE_THRESHOLD` | `0.003` | RMS 收音門檻（0–1）；畫面的靈敏度選擇可覆蓋此值。收不到小聲說話可降低；環境太吵可提高 |
 | `MODEL_DIR` | `.cache/models` | 模型快取位置 |
 | `DATA_DIR` | `data` | SQLite 資料夾 |
+| `ASR_BACKEND` | `whisper` | `whisper` 或 `funasr`；FunASR 啟動檔會自動設定 |
+| `CAPTION_PORT` | `8000` | 本機服務連接埠；FunASR 啟動檔使用 8001 |
+| `FUNASR_MODEL_DIR` | `.cache/funasr` | Paraformer 與標點模型資料夾 |
 
 `base` 是易啟動的預設，專有名詞與臺灣口音仍需要人工校正。可改 `small` 提升品質；如果出現「辨識速度跟不上收音」，先改 `tiny` 或使用更快的電腦。不要使用英文專用模型。
 

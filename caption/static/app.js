@@ -298,7 +298,7 @@ setInterval(async () => {
 }, 3000);
 try {
   await refreshMicrophones().catch(() => {});
-  const health = await api('/api/health'); $('model').textContent = `Whisper ${health.model} · ${health.device.toUpperCase()}`;
+  const health = await api('/api/health'); $('model').textContent = `${health.label || 'Whisper'} ${health.model} · ${health.device.toUpperCase()}`;
   const rows = await loadSessions(), stored = localStorage.getItem('caption-session');
   if (rows.length) await openSession(rows.some(r => r.id === stored) ? stored : rows[0].id);
   else await newSession();

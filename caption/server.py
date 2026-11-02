@@ -13,7 +13,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
-from .asr import WhisperEngine
+from .asr import create_engine
 from .store import Store, export_transcript
 from .stream import AudioStream
 
@@ -44,7 +44,7 @@ def same_origin(origin, host):
 
 def create_app(db_path=None, engine=None):
     store = Store(db_path or Path(os.getenv("DATA_DIR", "data")) / "captions.sqlite3")
-    engine = engine or WhisperEngine()
+    engine = engine or create_engine()
     recordings = {}
 
     @asynccontextmanager
@@ -77,6 +77,7 @@ def create_app(db_path=None, engine=None):
     @app.get("/api/health")
     def health():
         return {"ok": True, "model": getattr(engine, "name", "test"), "device": getattr(engine, "device", "test"),
+                "backend": getattr(engine, "backend", "test"), "label": getattr(engine, "label", "Whisper"),
                 "model_loaded": getattr(engine, "model", None) is not None, "busy": bool(recordings),
                 "capture": next((s.stats() for s in recordings.values() if s is not None), None)}
 
