@@ -10,7 +10,7 @@
 
 1. 使用同樣的 64 位元 Python 3.11–3.13，在專案目錄雙擊 **`start-funasr.cmd`**。
 2. 開啟 **http://127.0.0.1:8001**，右上應顯示 `FunASR Paraformer 2pass · CPU`。
-3. 按開始收音，等候模型準備完成。首次需下載串流、句尾校正與標點三個模型，約 2 GB，之後使用本機快取。
+3. 按開始收音，等候模型準備完成。首次需下載串流、句尾校正與標點三個模型，合計約 3 GB，之後使用本機快取。
 
 FunASR 使用獨立 Python 環境，預設位於 `%USERPROFILE%/Documents/Codex/work/live-caption-funasr`，以避免 PyTorch 安裝遇到 Windows 長路徑限制，也避免將套件裝進 OneDrive 重新導向的「文件」資料夾；不修改系統設定。可透過 `CAPTION_FUNASR_ENV` 指定其他短路徑。
 
