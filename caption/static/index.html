@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>聽打工作台 · 即時字幕與校正</title>
+  <link rel="stylesheet" href="/static/style.css">
+  <script src="/static/app.js" type="module"></script>
+</head>
+<body>
+  <aside class="sidebar">
+    <a class="brand" href="/" aria-label="聽打工作台首頁"><span class="brand-mark">聽</span><span>聽打工作台<small>LIVE CAPTION EDITOR</small></span></a>
+    <button id="new-session" class="new-button">＋ 新增聽打</button>
+    <h2 class="aside-label">最近的聽打</h2>
+    <nav id="sessions" aria-label="聽打紀錄"></nav>
+    <div class="local-note"><span class="local-dot"></span> 本機工作空間<p>音訊在這台電腦辨識。<br>文字自動存於本機。</p></div>
+  </aside>
+  <main>
+    <header class="topbar"><span>工作空間 <span class="slash">/</span> 即時聽打</span><span class="version">MVP · 01</span></header>
+    <section class="workspace">
+      <div class="heading"><div><p class="eyebrow">聽見每一句，留下每一字</p><h1 id="title">新的聽打</h1><p class="subtitle">持續收音，同時校正。你的修改會鎖定保留。</p></div><span id="model" class="model-tag">本機 Whisper</span></div>
+      <section class="capture-panel" aria-label="收音控制">
+        <div class="capture-info"><span id="signal" class="signal"></span><div><strong id="recording-status" role="status">準備就緒</strong><p id="recording-detail">按下開始收音，允許使用麥克風。</p></div></div>
+        <div class="capture-actions"><button id="start" class="primary">● 開始收音</button><button id="stop" class="secondary" disabled>■ 停止收音</button></div>
+      </section>
+      <div id="notice" role="alert" hidden></div>
+      <div class="transcript-toolbar"><div><h2>逐字稿 <span id="count">0 段</span></h2><p>點選已確認文字，即可編輯並鎖定。</p></div><div class="export-controls"><label class="sr-only" for="export-format">匯出格式</label><select id="export-format"><option value="txt">TXT · 完整逐字稿</option><option value="json">JSON · 狀態與時間戳</option><option value="srt">SRT · 已確認字幕</option></select><button id="export" class="secondary" disabled>↓ 匯出</button></div></div>
+      <div class="legend" aria-label="字幕狀態"><span><i class="dot provisional"></i>暫定 · 仍在辨識</span><span><i class="dot committed"></i>AI 確認 · 可編輯</span><span><i class="dot human_corrected"></i>人工校正 · 已鎖定</span></div>
+      <div id="empty" class="empty"><div class="empty-wave">▂ ▅ ▃ ▇ ▅ ▂</div><h3>讓文字，跟上聲音。</h3><p>開始收音後，暫定字幕會出現在這裡。<br>稍作停頓，字幕確認後就能校正。</p><span>繁體中文辨識 · 人工修改保護 · 時間戳記</span></div>
+      <section id="segments" aria-label="字幕段落"></section>
+      <footer><span>已儲存文字可從左側重新開啟。</span><span>停止後請等候辨識完成再匯出。</span></footer>
+    </section>
+  </main>
+</body>
+</html>
