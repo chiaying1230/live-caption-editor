@@ -2,14 +2,13 @@
 <html lang="zh-Hant">
 <head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-<title>即時字幕</title><link rel="stylesheet" href="/static/style.css?v=3"><script src="/static/app.js?v=3" type="module"></script>
+<title>即時字幕</title><link rel="stylesheet" href="/static/style.css?v=4"><script src="/static/app.js?v=4" type="module"></script>
 </head>
 <body>
 <header class="screen-header"><span class="brand">即時字幕</span><span id="title">新的聽打</span><span id="count">0 段</span></header>
 <main id="caption-viewport" tabindex="0" aria-label="字幕，可捲動查看前文"><div class="caption-page">
 <div id="empty" class="empty"><p>讓文字，跟上聲音。</p><small>按下「開始收音」，字幕會一句一句出現。</small></div>
 <section id="segments" aria-label="即時字幕"></section></div></main>
-<section id="live-peek" class="live-peek" aria-label="校正時的最新字幕" hidden><small>最新字幕 · 持續收音</small><p id="live-peek-text"></p></section>
 <button id="follow-latest" class="follow-latest" hidden>↓ 回到最新字幕</button><div id="notice" role="alert" hidden></div>
 <footer class="control-dock" aria-label="字幕控制">
 <div class="capture-info"><span id="signal" class="signal"></span><strong id="recording-status" role="status">準備就緒</strong><meter id="input-level" aria-label="輸入音量" min="0" max="100" value="0">0</meter></div>

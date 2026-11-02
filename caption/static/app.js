@@ -43,20 +43,11 @@ viewport.addEventListener('scroll', () => {
 $('follow-latest').onclick = () => { currentEdit?.element.blur(); setFollowing(true); };
 function layoutCaptionSpace() {
   const dock = document.querySelector('.control-dock').getBoundingClientRect().height;
-  const peek = $('live-peek').hidden ? 0 : $('live-peek').getBoundingClientRect().height;
   document.documentElement.style.setProperty('--dock-space', `${dock}px`);
-  document.documentElement.style.setProperty('--peek-space', `${peek}px`);
   followLatest();
 }
 new ResizeObserver(layoutCaptionSpace).observe(document.querySelector('.control-dock'));
-new ResizeObserver(layoutCaptionSpace).observe($('live-peek'));
 window.addEventListener('resize', layoutCaptionSpace);
-function updateLivePeek() {
-  const row = [...segments.values()].filter(r => /[\p{L}\p{N}]/u.test(r.text)).at(-1);
-  $('live-peek').hidden = !currentEdit || !['recording','stopping'].includes(state) || !row || row.id === currentEdit.id;
-  $('live-peek-text').textContent = row?.text.slice(-140) || '';
-  layoutCaptionSpace();
-}
 function setFontSize(value) {
   const size = Math.min(112, Math.max(36, Number(value) || 64));
   $('caption-size').value = size; $('font-size-value').textContent = size;
@@ -129,7 +120,7 @@ function setState(next, detail) {
   state = next;
   $('recording-status').textContent = {idle:'準備就緒',preparing:'準備模型與麥克風',recording:'正在收音',stopping:'收音已停止，正在完成辨識'}[next];
   $('recording-detail').textContent = detail || {idle:'按下開始收音，允許使用麥克風。',preparing:'首次使用需要下載模型，請保持連線。',recording:'暫定字幕會持續更新；稍作停頓後即可編輯。',stopping:'最後一段音訊處理完成後，會保留在逐字稿。'}[next];
-  updateControls(); updateLivePeek();
+  updateControls();
 }
 async function refreshMicrophones() {
   if (!navigator.mediaDevices?.enumerateDevices) return;
@@ -192,7 +183,7 @@ function upsert(row) {
     text.addEventListener('blur', () => {
       const edit = inlineEdits.get(row.id); if (!edit) return;
       if (currentEdit === edit) { currentEdit = null; setFollowing(edit.wasFollowing); }
-      saveEdit(edit); updateLivePeek();
+      saveEdit(edit);
     });
     text.addEventListener('keydown', event => {
       if (event.isComposing) return;
@@ -216,7 +207,7 @@ function upsert(row) {
     text.setAttribute('aria-label',`編輯 ${time(row.start)} 字幕`);
   }
   if (!edit) text.textContent = row.text;
-  updateControls(); updateLivePeek(); followLatest();
+  updateControls(); followLatest();
 }
 function markDirty(edit) {
   const dirty = edit.element.innerText !== edit.original;
@@ -235,7 +226,7 @@ function beginInlineEdit(id) {
   }
   edit.wasFollowing = following; currentEdit = edit; setFollowing(false);
   cards.get(id).classList.add('editing'); cards.get(id).querySelector('.inline-tools').hidden = false;
-  showSettings(false); markDirty(edit); updateLivePeek();
+  showSettings(false); markDirty(edit);
 }
 function releaseEdit(edit) {
   if (currentEdit === edit || drafts.has(edit.id) || edit.saving) return;
@@ -296,7 +287,7 @@ async function openSession(id) {
 }
 async function selectSession(id) {
   const data = await api(`/api/sessions/${id}`);
-  inlineEdits.clear(); currentEdit=null; setFollowing(true); showSettings(false); updateLivePeek();
+  inlineEdits.clear(); currentEdit=null; setFollowing(true); showSettings(false);
   session = data.session;
   localStorage.setItem('caption-session', session.id);
   $('title').textContent = session.title;
