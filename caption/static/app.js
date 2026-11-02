@@ -4,6 +4,7 @@ let session = null, segments = new Map(), cards = new Map(), drafts = new Set();
 let state = 'idle', ws = null, context = null, media = null, source = null, processor = null, sink = null;
 let flushResolve = null;
 let polling = false;
+let navigating = false;
 
 function notice(message = '') { $('notice').textContent = message; $('notice').hidden = !message; }
 async function api(path, options = {}) {
@@ -15,13 +16,13 @@ async function api(path, options = {}) {
   return response.json();
 }
 function updateControls() {
-  $('start').disabled = state !== 'idle' || !session;
+  $('start').disabled = state !== 'idle' || !session || navigating;
   $('stop').disabled = !['preparing', 'recording'].includes(state);
-  $('new-session').disabled = state !== 'idle';
-  $('export').disabled = !session || !segments.size || drafts.size > 0;
+  $('new-session').disabled = state !== 'idle' || navigating;
+  $('export').disabled = !session || !segments.size || drafts.size > 0 || navigating;
   $('export').title = drafts.size ? '請先儲存或取消編輯，再匯出' : '';
   $('signal').classList.toggle('live', state === 'recording');
-  for (const button of $('sessions').children) button.disabled = state !== 'idle';
+  for (const button of $('sessions').children) button.disabled = state !== 'idle' || navigating;
   $('count').textContent = `${segments.size} 段`;
   $('empty').hidden = segments.size > 0;
 }
@@ -42,6 +43,7 @@ function node(tag, className, text) {
   return el;
 }
 function upsert(row) {
+  if (!session || row.session_id !== session.id) return;
   const previous = segments.get(row.id);
   if (previous && previous.revision > row.revision) return;
   segments.set(row.id, row);
@@ -118,8 +120,13 @@ async function loadSessions() {
   return rows;
 }
 async function openSession(id) {
-  if (state !== 'idle') return;
+  if (state !== 'idle' || navigating) return;
   if (drafts.size) { notice('請先儲存或取消編輯，再切換聽打。'); return; }
+  navigating = true; updateControls();
+  try { await selectSession(id); }
+  finally { navigating = false; updateControls(); }
+}
+async function selectSession(id) {
   const data = await api(`/api/sessions/${id}`);
   session = data.session;
   localStorage.setItem('caption-session', session.id);
@@ -130,10 +137,14 @@ async function openSession(id) {
   notice(data.recording ? '這場聽打仍在其他頁面收音或處理中；請先在原頁面停止。' : data.segments.some(r => r.status === 'provisional') ? '有上次中斷留下的暫定字幕，尚未經 AI 確認；TXT 與 JSON 匯出會保留並標示。' : '');
 }
 async function newSession() {
+  if (state !== 'idle' || navigating) return;
   if (drafts.size) { notice('請先儲存或取消編輯，再新增聽打。'); return; }
-  const title = `聽打 ${new Date().toLocaleString('zh-TW',{month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'})}`;
-  const row = await api('/api/sessions',{method:'POST',body:JSON.stringify({title})});
-  await openSession(row.id);
+  navigating = true; updateControls();
+  try {
+    const title = `聽打 ${new Date().toLocaleString('zh-TW',{month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'})}`;
+    const row = await api('/api/sessions',{method:'POST',body:JSON.stringify({title})});
+    await selectSession(row.id);
+  } finally { navigating = false; updateControls(); }
 }
 function releaseAudio() {
   media?.getTracks().forEach(track => track.stop()); media = null;
@@ -186,6 +197,7 @@ async function setupAudio(socket) {
   }
 }
 function startCapture() {
+  if (state !== 'idle' || navigating || !session) return;
   if (!navigator.mediaDevices?.getUserMedia || !window.AudioWorkletNode) {
     notice('請使用最新版 Chrome 或 Edge，並以 http://127.0.0.1:8000 開啟。'); return;
   }
@@ -193,6 +205,7 @@ function startCapture() {
   const socket = new WebSocket(`${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/api/sessions/${session.id}/audio`);
   ws = socket;
   socket.onmessage = (event) => {
+    if (ws !== socket) return;
     const data = JSON.parse(event.data);
     if (data.type === 'ready' && state === 'preparing') setupAudio(socket);
     if (data.type === 'segment') upsert(data.segment);
@@ -220,12 +233,12 @@ window.addEventListener('beforeunload', event => {
 // Recover updates completed after a disconnected page and show corrections
 // from another tab. upsert preserves open drafts and ignores older revisions.
 setInterval(async () => {
-  if (!session || state !== 'idle' || polling) return;
+  if (!session || state !== 'idle' || polling || navigating) return;
   polling = true;
   const sid = session.id;
   try {
     const data = await api(`/api/sessions/${sid}`);
-    if (session?.id === sid && state === 'idle') for (const row of data.segments) upsert(row);
+    if (session?.id === sid && state === 'idle' && !navigating) for (const row of data.segments) upsert(row);
   } catch { /* Keep the saved view usable during a brief server restart. */ }
   finally { polling = false; }
 }, 3000);

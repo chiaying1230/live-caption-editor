@@ -18,7 +18,12 @@ const path = require('node:path');
   try {
     await page.goto(process.env.SMOKE_BASE_URL || 'http://127.0.0.1:8001');
     await page.locator('#start:enabled').waitFor();
+    // Session creation must disable capture immediately, even before HTTP returns.
+    const creation = page.waitForResponse(r => r.url().endsWith('/api/sessions') && r.request().method() === 'POST');
     await page.locator('#new-session').click();
+    assert.ok(await page.locator('#start').isDisabled());
+    const created = await (await creation).json();
+    await page.waitForFunction(id => localStorage.getItem('caption-session') === id, created.id);
     await page.locator('#start:enabled').waitFor();
     await page.locator('#start').click();
     await page.locator('.segment.provisional').first().waitFor({timeout:120000});
@@ -58,5 +63,8 @@ const path = require('node:path');
     assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
     assert.deepEqual(errors,[]);
     console.log('PASS: fake microphone -> real ASR -> provisional/committed -> edit during capture -> locked -> stop -> export -> reload; mobile layout; no browser errors');
+  } catch (error) {
+    await page.screenshot({path:'work/smoke-failure.png',fullPage:true});
+    throw error;
   } finally { await browser.close(); }
 })().catch(error => {console.error(error);process.exitCode=1;});

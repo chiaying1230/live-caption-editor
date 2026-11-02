@@ -9,8 +9,13 @@ if (-not (Test-Path -LiteralPath $python)) {
     & python -m venv .venv
     if ($LASTEXITCODE -ne 0) { throw 'Could not create .venv. Check your Python installation.' }
 }
-& $python -m pip install -e .
-if ($LASTEXITCODE -ne 0) { throw 'Dependency installation failed. Check the network and Python version.' }
+$dependencyHash = (Get-FileHash -LiteralPath (Join-Path $PSScriptRoot 'pyproject.toml') -Algorithm SHA256).Hash
+$marker = Join-Path $PSScriptRoot '.venv\project-deps.sha256'
+if (-not (Test-Path -LiteralPath $marker) -or (Get-Content -LiteralPath $marker -Raw).Trim() -ne $dependencyHash) {
+    & $python -m pip install -e .
+    if ($LASTEXITCODE -ne 0) { throw 'Dependency installation failed. Check the network and Python version.' }
+    Set-Content -LiteralPath $marker -Value $dependencyHash -Encoding ASCII
+}
 Write-Host ''
 Write-Host 'Open http://127.0.0.1:8000 in Chrome or Edge.' -ForegroundColor Green
 Write-Host 'First capture downloads the Whisper model. Keep this window open.'
