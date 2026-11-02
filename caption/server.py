@@ -4,6 +4,7 @@ import logging
 import os
 from contextlib import asynccontextmanager
 from pathlib import Path
+from typing import Literal
 from urllib.parse import urlsplit
 
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
@@ -29,6 +30,11 @@ class Correction(BaseModel):
     revision: int = Field(ge=0)
 
 
+class AudioConfiguration(BaseModel):
+    type: Literal["configure"]
+    threshold: float = Field(ge=0.0005, le=0.1, allow_inf_nan=False)
+
+
 def same_origin(origin, host):
     if not origin:
         return True  # Local command-line clients do not send Origin.
@@ -39,7 +45,7 @@ def same_origin(origin, host):
 def create_app(db_path=None, engine=None):
     store = Store(db_path or Path(os.getenv("DATA_DIR", "data")) / "captions.sqlite3")
     engine = engine or WhisperEngine()
-    recordings = set()
+    recordings = {}
 
     @asynccontextmanager
     async def lifespan(app):
@@ -71,7 +77,8 @@ def create_app(db_path=None, engine=None):
     @app.get("/api/health")
     def health():
         return {"ok": True, "model": getattr(engine, "name", "test"), "device": getattr(engine, "device", "test"),
-                "model_loaded": getattr(engine, "model", None) is not None, "busy": bool(recordings)}
+                "model_loaded": getattr(engine, "model", None) is not None, "busy": bool(recordings),
+                "capture": next((s.stats() for s in recordings.values() if s is not None), None)}
 
     @app.get("/api/sessions")
     def sessions():
@@ -125,16 +132,17 @@ def create_app(db_path=None, engine=None):
             await send({"type": "error", "message": "找不到聽打，或已有收音正在處理。請等待停止完成。"})
             await ws.close(code=1008)
             return
-        recordings.add(sid)  # Reserve before the first await; only one capture per server.
+        recordings[sid] = None  # Reserve before the first await; one capture per server.
         stream = None
         worker = receiver = None
         try:
             await send({"type": "loading", "message": "正在準備辨識模型；首次會下載，請稍候。"})
             await asyncio.to_thread(engine.load)
             stream = AudioStream(store, sid, engine, send,
-                                 threshold=float(os.getenv("VOICE_THRESHOLD", "0.008")))
+                                 threshold=float(os.getenv("VOICE_THRESHOLD", "0.003")))
+            recordings[sid] = stream
             worker = asyncio.create_task(stream.run())
-            await send({"type": "ready", "offset": stream.offset})
+            await send({"type": "ready", "offset": stream.offset, "threshold": stream.threshold})
             while connected:
                 receiver = asyncio.create_task(ws.receive())
                 done, _ = await asyncio.wait([receiver, worker], return_when=asyncio.FIRST_COMPLETED)
@@ -152,7 +160,9 @@ def create_app(db_path=None, engine=None):
                     command = json.loads(message["text"])
                     if command == {"type": "stop"}:
                         break
-                    raise ValueError("不支援的收音指令。")
+                    config = AudioConfiguration.model_validate(command)
+                    stream.threshold = config.threshold
+                    await send({"type": "configured", "threshold": stream.threshold})
         except WebSocketDisconnect:
             connected = False
         except (ValueError, json.JSONDecodeError) as exc:
@@ -170,7 +180,7 @@ def create_app(db_path=None, engine=None):
                     await worker
             except Exception:
                 log.exception("ASR worker failed; provisional text retained")
-            recordings.discard(sid)
+            recordings.pop(sid, None)
             await send({"type": "stopped"})
             if connected:
                 await ws.close()

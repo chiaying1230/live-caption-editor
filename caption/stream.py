@@ -18,7 +18,7 @@ class Job:
 
 
 class AudioStream:
-    def __init__(self, store, sid, engine, send, *, threshold=0.008, silence_frames=8, max_frames=120):
+    def __init__(self, store, sid, engine, send, *, threshold=0.003, silence_frames=8, max_frames=120):
         self.store, self.sid, self.engine, self.send = store, sid, engine, send
         self.threshold, self.silence_frames, self.max_frames = threshold, silence_frames, max_frames
         self.offset = store.offset(sid)
@@ -33,6 +33,15 @@ class AudioStream:
         self.finishing = False
         self.failed = False
         self.last_preview = 0
+        self.rms = self.max_rms = 0.0
+        self.speech_frames = 0
+        self.processing = False
+
+    def stats(self):
+        return {"received_seconds": self.frames / 10, "rms": self.rms,
+                "max_rms": self.max_rms, "speech_frames": self.speech_frames,
+                "threshold": self.threshold, "processing": self.processing,
+                "queued_segments": len(self.finals)}
 
     async def feed(self, data):
         if self.failed or self.finishing:
@@ -41,7 +50,12 @@ class AudioStream:
             raise ValueError("音訊格式錯誤：需要 16 kHz mono PCM16，每包 100 ms。")
         audio = np.frombuffer(data, dtype="<i2").astype(np.float32) / 32768.0
         self.frames += 1
-        speech = float(np.sqrt(np.mean(audio * audio))) >= self.threshold
+        self.rms = float(np.sqrt(np.mean(audio * audio)))
+        self.max_rms = max(self.max_rms, self.rms)
+        speech = self.rms >= self.threshold
+        self.speech_frames += int(speech)
+        if self.frames % 10 == 0:
+            await self.send({"type": "audio", **self.stats()})
         if self.segid is None:
             if not speech:
                 self.pre.append(audio)
@@ -52,6 +66,9 @@ class AudioStream:
             self.pre.clear()
             self.quiet = 0
             self.last_preview = 0
+            # Acknowledge speech immediately; a slow first inference must not
+            # leave the workbench completely blank.
+            await self.send({"type": "segment", "segment": self.store.get(self.sid, self.segid)})
         self.active.append(audio)
         self.quiet = 0 if speech else self.quiet + 1
         end = self.offset + self.frames / 10
@@ -93,6 +110,8 @@ class AudioStream:
                 if job is self.preview:
                     self.preview = None
                 try:
+                    self.processing = True
+                    await self.send({"type": "recognizing", "final": job.final})
                     text = await asyncio.to_thread(self.engine.transcribe, job.audio)
                     row = self.store.apply_asr(self.sid, job.segid, text, job.end, job.final)
                     await self.send({"type": "segment", "segment": row})
@@ -101,5 +120,7 @@ class AudioStream:
                     # Keep provisional text in SQLite; never call an unsuccessful result committed.
                     await self.send({"type": "error", "message": "辨識失敗，暫定字幕已保留。請停止收音並查看伺服器視窗。"})
                     raise
+                finally:
+                    self.processing = False
             if self.finishing:
                 return

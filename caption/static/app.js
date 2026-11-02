@@ -5,6 +5,8 @@ let state = 'idle', ws = null, context = null, media = null, source = null, proc
 let flushResolve = null;
 let polling = false;
 let navigating = false;
+let inputFrames = 0, lastAudioAt = 0, recordingSince = 0, inputRms = 0, threshold = .003;
+let receivedSeconds = 0, hasRecognizedText = false;
 
 function notice(message = '') { $('notice').textContent = message; $('notice').hidden = !message; }
 async function api(path, options = {}) {
@@ -22,6 +24,7 @@ function updateControls() {
   $('export').disabled = !session || !segments.size || drafts.size > 0 || navigating;
   $('export').title = drafts.size ? '請先儲存或取消編輯，再匯出' : '';
   $('signal').classList.toggle('live', state === 'recording');
+  $('microphone').disabled = state !== 'idle';
   for (const button of $('sessions').children) button.disabled = state !== 'idle' || navigating;
   $('count').textContent = `${segments.size} 段`;
   $('empty').hidden = segments.size > 0;
@@ -32,6 +35,29 @@ function setState(next, detail) {
   $('recording-detail').textContent = detail || {idle:'按下開始收音，允許使用麥克風。',preparing:'首次使用需要下載模型，請保持連線。',recording:'暫定字幕會持續更新；稍作停頓後即可編輯。',stopping:'最後一段音訊處理完成後，會保留在逐字稿。'}[next];
   updateControls();
 }
+async function refreshMicrophones() {
+  if (!navigator.mediaDevices?.enumerateDevices) return;
+  const selected = $('microphone').value;
+  const devices = (await navigator.mediaDevices.enumerateDevices()).filter(d => d.kind === 'audioinput' && d.deviceId);
+  $('microphone').replaceChildren(new Option('系統預設麥克風',''));
+  devices.forEach((device, i) => $('microphone').add(new Option(device.label || `麥克風 ${i+1}`,device.deviceId)));
+  if (devices.some(d => d.deviceId === selected)) $('microphone').value = selected;
+}
+function configureSensitivity() {
+  if (ws?.readyState !== WebSocket.OPEN || !['preparing','recording'].includes(state)) return;
+  threshold = Number($('sensitivity').value || threshold);
+  ws.send(JSON.stringify({type:'configure',threshold}));
+}
+$('sensitivity').onchange = configureSensitivity;
+navigator.mediaDevices?.addEventListener('devicechange', () => refreshMicrophones().catch(() => {}));
+setInterval(() => {
+  if (state !== 'recording') return;
+  if (Date.now() - lastAudioAt > 3000 && Date.now() - recordingSince > 3000) {
+    $('audio-status').textContent = '尚未收到麥克風音訊。請停止後改選麥克風；也請確認瀏覽器分頁沒有休眠。';
+  } else if (inputFrames > 30 && inputRms < threshold) {
+    $('audio-status').textContent = `已收到 ${receivedSeconds.toFixed(1)} 秒音訊，目前音量偏小。請對著麥克風說話；若仍無字幕，可把靈敏度改為「高」。`;
+  }
+}, 1000);
 function time(value) {
   const secs = Math.floor(value), h = Math.floor(secs/3600), m = Math.floor(secs%3600/60), s = secs%60;
   return `${h ? String(h).padStart(2,'0') + ':' : ''}${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`;
@@ -151,6 +177,7 @@ function releaseAudio() {
   source?.disconnect(); processor?.disconnect(); sink?.disconnect();
   source = processor = sink = null;
   if (context) { context.close().catch(() => {}); context = null; }
+  $('input-level').value = 0;
 }
 async function stopCapture() {
   if (!['preparing','recording'].includes(state)) return;
@@ -167,9 +194,12 @@ async function stopCapture() {
 }
 async function setupAudio(socket) {
   try {
-    const stream = await navigator.mediaDevices.getUserMedia({audio:{channelCount:1,echoCancellation:true,noiseSuppression:true},video:false});
+    const chosen = $('microphone').value;
+    const stream = await navigator.mediaDevices.getUserMedia({audio:{channelCount:1,echoCancellation:true,
+      noiseSuppression:false, ...(chosen ? {deviceId:{exact:chosen}} : {})},video:false});
     if (ws !== socket || state !== 'preparing' || socket.readyState !== WebSocket.OPEN) { stream.getTracks().forEach(t => t.stop()); return; }
     media = stream;
+    await refreshMicrophones();
     context = new AudioContext();
     await context.audioWorklet.addModule('/static/pcm-worklet.js');
     if (state !== 'preparing' || socket !== ws) { releaseAudio(); return; }
@@ -179,6 +209,10 @@ async function setupAudio(socket) {
     processor.port.onmessage = ({data}) => {
       if (data === 'flushed') { flushResolve?.(); return; }
       if (socket.readyState === WebSocket.OPEN && ['recording','stopping'].includes(state)) {
+        const pcm = new Int16Array(data);
+        inputRms = Math.sqrt(pcm.reduce((sum, value) => sum + (value/32768)**2, 0) / pcm.length);
+        $('input-level').value = Math.max(0, Math.min(100, 100 + 30*Math.log10(Math.max(inputRms,1e-8))));
+        inputFrames++; lastAudioAt = Date.now();
         if (socket.bufferedAmount > 16000 * 2 * 5) {
           notice('連線傳送速度不足，已停止收音。請檢查本機服務。');
           stopCapture(); return;
@@ -191,6 +225,8 @@ async function setupAudio(socket) {
     if (state !== 'preparing') { releaseAudio(); return; }
     media.getTracks()[0].onended = () => { notice('麥克風已中斷，正在保留已收到的字幕。'); stopCapture(); };
     setState('recording');
+    recordingSince = Date.now();
+    $('audio-status').textContent = `使用：${media.getTracks()[0].label || '麥克風'}。請說一句完整的話，並稍作停頓。`;
   } catch (error) {
     notice(`無法啟動麥克風：${error.message}。請確認瀏覽器權限，並使用 localhost 或 127.0.0.1。`);
     await stopCapture();
@@ -202,13 +238,31 @@ function startCapture() {
     notice('請使用最新版 Chrome 或 Edge，並以 http://127.0.0.1:8000 開啟。'); return;
   }
   notice(); setState('preparing');
+  inputFrames = receivedSeconds = 0; inputRms = 0; hasRecognizedText = false;
+  lastAudioAt = Date.now();
   const socket = new WebSocket(`${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/api/sessions/${session.id}/audio`);
   ws = socket;
   socket.onmessage = (event) => {
     if (ws !== socket) return;
     const data = JSON.parse(event.data);
-    if (data.type === 'ready' && state === 'preparing') setupAudio(socket);
-    if (data.type === 'segment') upsert(data.segment);
+    if (data.type === 'ready' && state === 'preparing') {
+      threshold = data.threshold ?? .003; configureSensitivity(); setupAudio(socket);
+    }
+    if (data.type === 'configured') threshold = data.threshold;
+    if (data.type === 'audio') {
+      receivedSeconds = data.received_seconds;
+      if (state === 'recording' && inputRms >= threshold) $('audio-status').textContent = `服務已收到 ${receivedSeconds.toFixed(1)} 秒音訊 · ${data.processing ? '正在辨識，請稍候' : '已偵測到聲音'}`;
+    }
+    if (data.type === 'recognizing' && state === 'recording') {
+      $('recording-detail').textContent = data.final ? '已偵測停頓，正在確認這段字幕。' : '已收到聲音，正在產生暫定字幕；第一次推論可能較久。';
+    }
+    if (data.type === 'segment') {
+      upsert(data.segment);
+      if (data.segment.text) hasRecognizedText = true;
+      if (data.segment.status === 'committed' && !data.segment.text && !hasRecognizedText) {
+        $('audio-status').textContent = '有收到音訊，但模型尚未辨識出文字。請確認選對麥克風、靠近說話，再試一個完整句子。';
+      }
+    }
     if (data.type === 'error') { notice(data.message); stopCapture(); }
     if (data.type === 'stopped') { releaseAudio(); setState('idle','辨識已完成。文字已存入本機，可繼續校正或匯出。'); }
   };
@@ -243,6 +297,7 @@ setInterval(async () => {
   finally { polling = false; }
 }, 3000);
 try {
+  await refreshMicrophones().catch(() => {});
   const health = await api('/api/health'); $('model').textContent = `Whisper ${health.model} · ${health.device.toUpperCase()}`;
   const rows = await loadSessions(), stored = localStorage.getItem('caption-session');
   if (rows.length) await openSession(rows.some(r => r.id === stored) ? stored : rows[0].id);

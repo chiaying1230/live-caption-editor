@@ -70,11 +70,38 @@ def test_silence_does_not_create_segments_and_malformed_pcm_rejected(tmp_path):
     async def scenario():
         store = Store(tmp_path / "silent.db")
         sid = store.create_session("測試")["id"]
-        stream = AudioStream(store, sid, Engine(), None)
+        events = []
+        async def send(event):
+            events.append(event)
+        stream = AudioStream(store, sid, Engine(), send)
         for _ in range(50):
             await stream.feed(SILENCE)
         assert store.segments(sid) == []
+        assert len(events) == 5 and events[-1]["received_seconds"] == 5
+        assert events[-1]["speech_frames"] == 0
         with pytest.raises(ValueError, match="音訊格式"):
             await stream.feed(b"bad")
+        store.close()
+    asyncio.run(scenario())
+
+
+def test_quiet_speech_gets_immediate_pending_segment(tmp_path):
+    async def scenario():
+        store = Store(tmp_path / "quiet.db")
+        sid = store.create_session("測試")["id"]
+        events = []
+        async def send(event):
+            events.append(event)
+        stream = AudioStream(store, sid, Engine(), send)
+        quiet = (np.ones(1600, dtype="<i2") * 160).tobytes()
+        await stream.feed(quiet)
+        # This volume was discarded by the original 0.008 gate. Display pending
+        # immediately without waiting for the model worker to finish inference.
+        assert events[0]["type"] == "segment"
+        assert events[0]["segment"]["status"] == "provisional"
+        assert events[0]["segment"]["text"] == ""
+        await stream.finish()
+        await stream.run()
+        assert store.segments(sid)[0]["text"]
         store.close()
     asyncio.run(scenario())

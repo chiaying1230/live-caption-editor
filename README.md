@@ -38,6 +38,8 @@ macOS / Linux 將 `.\.venv\Scripts\python.exe` 換成 `.venv/bin/python`，必�
 
 - **新增聽打**：建立獨立逐字稿；左側可重新開啟最近 100 場紀錄。
 - **開始收音**：準備模型後才開啟麥克風。黃色「暫定」會反覆更新，尚不可編輯。
+- **確認收音來源**：可選擇實際麥克風；說話時「輸入音量」條應有變化。畫面會回報服務收到幾秒音訊與模型處理狀態，偵測到聲音後立即出現暫定段落佔位。
+- **小聲說話**：若音量條會動但一直沒有文字，可將「收音靈敏度」改成「高」，不需停止收音。若音量條完全不動，先停止，再改選正確麥克風。
 - **確認字幕**：說話停頓約 0.8 秒，或單段收音達 12 秒，會排入最終辨識，完成後變成藍色「AI 確認」。AI 確認表示此段不再自動更新，並非內容保證正確。
 - **人工校正**：點「編輯文字」，輸入後按「儲存並鎖定」或 `Ctrl+Enter`；`Esc` 取消。綠色「人工校正 · 已鎖定」仍可再次由人修改，但 ASR 永遠不能覆寫。刪成空白也會保留鎖定。
 - **同時收音與校正**：編輯框不會被新字幕重建或搶走焦點。中文輸入法組字期間不觸發快捷鍵。
@@ -61,7 +63,7 @@ $env:ASR_MODEL = 'small'  # tiny / base / small / medium / large-v3 / large-v3-t
 | `ASR_DEVICE` | `cpu` | `cpu` 或 `cuda` |
 | `ASR_COMPUTE_TYPE` | CPU: `int8` / CUDA: `float16` | 必須與硬體相容 |
 | `ASR_CPU_THREADS` | `4` | CPU 推論執行緒數 |
-| `VOICE_THRESHOLD` | `0.008` | RMS 收音門檻（0–1）。收不到小聲說話可降低；環境太吵可提高 |
+| `VOICE_THRESHOLD` | `0.003` | RMS 收音門檻（0–1）；畫面的靈敏度選擇可覆蓋此值。收不到小聲說話可降低；環境太吵可提高 |
 | `MODEL_DIR` | `.cache/models` | 模型快取位置 |
 | `DATA_DIR` | `data` | SQLite 資料夾 |
 
@@ -114,7 +116,7 @@ Confirmed segment editor -> HTTP PATCH + revision check -> SQLite
 | `GET /api/sessions/{sid}/export/{txt\|json\|srt}` | 匯出逐字稿 |
 | `WS /api/sessions/{sid}/audio` | 100 ms PCM16 binary frame；文字 `{ "type": "stop" }` 結束 |
 
-WebSocket 回覆 `loading` → `ready` → 多個 `segment` → `stopped`；問題以 `error` 回傳。服務也提供 `/docs` API 文件。
+WebSocket 回覆 `loading` → `ready` → 多個 `segment` → `stopped`；另以 `audio` 回報收音秒數／音量，以 `recognizing` 回報推論中。`{"type":"configure","threshold":0.001}` 可調整當次收音門檻（0.0005–0.1）。問題以 `error` 回傳。`/api/health` 的 `capture` 欄位可查看音訊接收狀態，不含音訊或文字內容。服務也提供 `/docs` API 文件。
 
 ## 測試
 
@@ -138,6 +140,7 @@ node --test tests/audio-worklet.test.cjs
 - **單一收音者**：整台服務同時只允許一條收音連線。可在其他頁面讀取／校正，但不是完整多人協作系統。
 - **本機範圍**：沒有登入或加密資料庫。預設只服務本機，有限制 Host／Origin；請勿把此 MVP 直接暴露到網際網路。
 - **麥克風不能使用**：確認使用 `http://127.0.0.1:8000` 或 `http://localhost:8000`，不要用區網 IP；確認瀏覽器允許麥克風、裝置未被拔除。
+- **正在收音但沒有字幕**：先看音量條。有變化而音量偏小時改用「高」靈敏度；完全不動時停止並改選麥克風。若顯示服務已收到音訊、正在辨識，請講一個完整句子並等候模型回覆；若模型回覆空白，畫面會提示確認收音來源與說話音量。
 - **下載或 DLL 錯誤**：查看服務視窗的錯誤。確認網路可連 Hugging Face，Python 為 64 位元 3.11–3.13。若 CTranslate2 缺少 `VCRUNTIME`，安裝 Microsoft 官方 Visual C++ Redistributable x64，再重啟。
 - **8000 已被占用**：先關閉之前的服務；或以 `.\.venv\Scripts\python.exe -m uvicorn caption.server:create_app --factory --host 127.0.0.1 --port 8001 --ws-max-size 65536` 啟動，改開 8001。
 - **PyAV 相容性**：已限制 `av>=15,<17`，避免測試發現的 PyAV 19 與 faster-whisper 解碼參數不相容。請使用專案依賴安裝方式，不要單獨升級 PyAV。
