@@ -1,41 +1,36 @@
 <!doctype html>
 <html lang="zh-Hant">
 <head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>聽打工作台 · 即時字幕與校正</title>
-  <link rel="stylesheet" href="/static/style.css">
-  <script src="/static/app.js" type="module"></script>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>即時字幕</title><link rel="stylesheet" href="/static/style.css?v=2"><script src="/static/app.js?v=2" type="module"></script>
 </head>
 <body>
-  <aside class="sidebar">
-    <a class="brand" href="/" aria-label="聽打工作台首頁"><span class="brand-mark">聽</span><span>聽打工作台<small>LIVE CAPTION EDITOR</small></span></a>
-    <button id="new-session" class="new-button">＋ 新增聽打</button>
-    <h2 class="aside-label">最近的聽打</h2>
-    <nav id="sessions" aria-label="聽打紀錄"></nav>
-    <div class="local-note"><span class="local-dot"></span> 本機工作空間<p>音訊在這台電腦辨識。<br>文字自動存於本機。</p></div>
-  </aside>
-  <main>
-    <header class="topbar"><span>工作空間 <span class="slash">/</span> 即時聽打</span><span class="version">MVP · 01.1</span></header>
-    <section class="workspace">
-      <div class="heading"><div><p class="eyebrow">聽見每一句，留下每一字</p><h1 id="title">新的聽打</h1><p class="subtitle">持續收音，同時校正。你的修改會鎖定保留。</p></div><span id="model" class="model-tag">本機 Whisper</span></div>
-      <section class="capture-panel" aria-label="收音控制">
-        <div class="capture-info"><span id="signal" class="signal"></span><div><strong id="recording-status" role="status">準備就緒</strong><p id="recording-detail">按下開始收音，允許使用麥克風。</p></div></div>
-        <div class="capture-actions"><button id="start" class="primary">● 開始收音</button><button id="stop" class="secondary" disabled>■ 停止收音</button></div>
-      </section>
-      <section class="audio-tools" aria-label="麥克風設定與音訊狀態">
-        <label>麥克風<select id="microphone"><option value="">系統預設麥克風</option></select></label>
-        <label>收音靈敏度<select id="sensitivity"><option value="">依預設</option><option value="0.001">高 · 適合小聲說話</option><option value="0.003">一般</option><option value="0.012">低 · 適合吵雜環境</option></select></label>
-        <div class="level"><label for="input-level">輸入音量</label><meter id="input-level" min="0" max="100" value="0">0</meter></div>
-        <p id="audio-status" role="status">開始後，請確認音量條會隨說話變化。</p>
-      </section>
-      <div id="notice" role="alert" hidden></div>
-      <div class="transcript-toolbar"><div><h2>逐字稿 <span id="count">0 段</span></h2><p>點選已確認文字，即可編輯並鎖定。</p></div><div class="export-controls"><label class="sr-only" for="export-format">匯出格式</label><select id="export-format"><option value="txt">TXT · 完整逐字稿</option><option value="json">JSON · 狀態與時間戳</option><option value="srt">SRT · 已確認字幕</option></select><button id="export" class="secondary" disabled>↓ 匯出</button></div></div>
-      <div class="legend" aria-label="字幕狀態"><span><i class="dot provisional"></i>暫定 · 仍在辨識</span><span><i class="dot committed"></i>AI 確認 · 可編輯</span><span><i class="dot human_corrected"></i>人工校正 · 已鎖定</span></div>
-      <div id="empty" class="empty"><div class="empty-wave">▂ ▅ ▃ ▇ ▅ ▂</div><h3>讓文字，跟上聲音。</h3><p>開始收音後，暫定字幕會出現在這裡。<br>稍作停頓，字幕確認後就能校正。</p><span>繁體中文辨識 · 人工修改保護 · 時間戳記</span></div>
-      <section id="segments" aria-label="字幕段落"></section>
-      <footer><span>已儲存文字可從左側重新開啟。</span><span>停止後請等候辨識完成再匯出。</span></footer>
-    </section>
-  </main>
-</body>
-</html>
+<header class="screen-header"><span class="brand">即時字幕</span><span id="title">新的聽打</span><span id="count">0 段</span></header>
+<main id="caption-viewport" tabindex="0" aria-label="字幕，可捲動查看前文"><div class="caption-page">
+<div id="empty" class="empty"><p>讓文字，跟上聲音。</p><small>按下「開始收音」，字幕會一句一句出現。</small></div>
+<section id="segments" aria-label="即時字幕"></section></div></main>
+<button id="follow-latest" class="follow-latest" hidden>↓ 回到最新字幕</button><div id="notice" role="alert" hidden></div>
+<footer class="control-dock" aria-label="字幕控制">
+<div class="capture-info"><span id="signal" class="signal"></span><strong id="recording-status" role="status">準備就緒</strong><meter id="input-level" aria-label="輸入音量" min="0" max="100" value="0">0</meter></div>
+<div class="capture-actions"><button id="start" class="primary">● 開始收音</button><button id="stop" disabled>■ 停止</button></div>
+<button id="edit-latest">校正字幕</button><label class="font-control" for="caption-size">字級 <input id="caption-size" type="range" min="36" max="112" step="4" value="64"><output id="font-size-value" for="caption-size">64</output></label>
+<button id="fullscreen">⛶ 全螢幕</button><button id="settings-toggle" aria-expanded="false" aria-controls="settings">設定與紀錄</button>
+</footer>
+<aside id="settings" class="settings" aria-label="設定與聽打紀錄" hidden>
+<div class="panel-heading"><h2>設定與紀錄</h2><button id="settings-close" aria-label="關閉設定">✕</button></div>
+<p id="model" class="model-tag">本機辨識</p><p id="recording-detail">按下開始收音，允許使用麥克風。</p>
+<label>麥克風<select id="microphone"><option value="">系統預設麥克風</option></select></label>
+<label>收音靈敏度<select id="sensitivity"><option value="">依預設</option><option value="0.001">高 · 適合小聲說話</option><option value="0.003">一般</option><option value="0.012">低 · 適合吵雜環境</option></select></label>
+<p id="audio-status" role="status">開始後，請確認音量條會隨說話變化。</p>
+<div class="legend"><span>虛線底線：暫定字幕</span><span>一般文字：AI 確認</span><span>✓：人工校正並鎖定</span></div>
+<p>點選已確認的句子，可在上方小視窗校正。往上捲動會暫停跟隨，按「回到最新字幕」繼續。</p>
+<div class="export-controls"><label for="export-format">匯出逐字稿<select id="export-format"><option value="txt">TXT · 完整逐字稿</option><option value="json">JSON · 狀態與時間戳</option><option value="srt">SRT · 已確認字幕</option></select></label><button id="export" disabled>↓ 匯出</button></div>
+<button id="new-session" class="primary">＋ 新增聽打</button><h3>最近的聽打</h3><nav id="sessions" aria-label="聽打紀錄"></nav><small>本機辨識 · 文字自動儲存</small>
+</aside>
+<section id="floating-editor" class="floating-editor" role="region" aria-label="浮動字幕校正" hidden>
+<div id="editor-handle" class="editor-handle"><strong>字幕校正 <small>拖曳此處移動</small></strong><button id="editor-close" aria-label="關閉校正視窗">✕</button></div>
+<form id="correction-form"><div class="editor-navigation"><button id="edit-previous" type="button" aria-label="前一句">←</button><label class="sr-only" for="edit-segment">選擇要校正的句子</label><select id="edit-segment"></select><button id="edit-next" type="button" aria-label="後一句">→</button></div>
+<label class="sr-only" for="correction-text">校正字幕文字</label><textarea id="correction-text" maxlength="20000" rows="2"></textarea>
+<div class="edit-actions"><span id="editor-state"></span><small>Ctrl + Enter 儲存 · Esc 取消</small><button id="editor-cancel" type="button">取消</button><button id="editor-save" class="primary" type="submit">儲存並鎖定</button></div>
+</form></section>
+</body></html>
