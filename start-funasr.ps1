@@ -30,9 +30,10 @@ if (-not (Test-Path -LiteralPath $marker) -or (Get-Content -LiteralPath $marker 
     Set-Content -LiteralPath $marker -Value $dependencyHash -Encoding ASCII
 }
 $env:ASR_BACKEND = 'funasr'
+if (-not $env:FUNASR_PREVIEW_MODE) { $env:FUNASR_PREVIEW_MODE = 'context' }
 $env:CAPTION_PORT = '8001'
 $env:DATA_DIR = 'data-funasr'
 Write-Host 'Open http://127.0.0.1:8001 in Chrome or Edge.' -ForegroundColor Green
 Write-Host 'This uses a separate database. Your Whisper transcripts remain on port 8000.'
-Write-Host 'The first capture prepares streaming, final and punctuation models. Keep this window open.'
+Write-Host 'The first capture prepares the caption models. Keep this window open.'
 & $python -m caption

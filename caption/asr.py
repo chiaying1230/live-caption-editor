@@ -54,4 +54,7 @@ def create_engine():
         return FunASREngine()
     if backend == "whisper":
         return WhisperEngine()
-    raise ValueError("ASR_BACKEND must be whisper or funasr")
+    if backend == "sensevoice":
+        from .sensevoice_engine import SenseVoiceEngine
+        return SenseVoiceEngine()
+    raise ValueError("ASR_BACKEND must be whisper, funasr or sensevoice")

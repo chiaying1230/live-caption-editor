@@ -140,3 +140,23 @@ def test_pending_preview_is_delivered_before_slower_final(tmp_path):
         assert all(a['end']<=b['end'] for a,b in zip(rows,rows[1:]))
         store.close()
     asyncio.run(scenario())
+
+
+def test_context_previews_reconsider_whole_utterance_instead_of_append():
+    class ContextModel:
+        def __init__(self): self.inputs=[]
+        def generate(self, *, input, **kwargs):
+            self.inputs.append(input.copy())
+            return [{'text':'語用能力' if len(input)>16000 else '語音'}]
+    online,offline=Online(),ContextModel()
+    engine=FunASREngine(online,offline,Converter(),preview_mode='context')
+    class Punctuation:
+        def generate(self, *, input, **kwargs):return [{'text':input+'。'}]
+    engine.punctuation=Punctuation()
+    recognizer=engine.new_session();audio=np.arange(32000,dtype=np.float32)
+    assert recognizer.recognize('a',audio[:16000],False)=='語音'
+    assert recognizer.recognize('a',audio,False)=='語用能力'
+    assert recognizer.recognize('a',audio,True)=='語用能力。'
+    np.testing.assert_array_equal(offline.inputs[1],audio)
+    assert online.calls==[]
+    assert engine.preview_frames==15 and engine.max_frames==120

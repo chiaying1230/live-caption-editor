@@ -1,5 +1,18 @@
 # MVP 驗證紀錄
 
+## 最新：候選模型與連續校正
+
+已下載並實際比較 SenseVoice、Breeze ASR 25、Whisper small、Qwen3-ASR 0.6B。相同公開測試集、CPU LoRA 小規模試驗與速度限制見 [MODEL_COMPARISON.md](MODEL_COMPARISON.md)，不以公開朗讀樣本宣稱實際課堂已改善。
+
+- 31 項 Python、4 項 AudioWorklet 測試通過。新增整句重新辨識、SenseVoice 片段隔離、暫定／確認標點與晚到 ASR 不得覆蓋人工鎖定。
+- Windows 啟動檔實際安裝並啟動 SenseVoice 8002、Paraformer 連續校正 8001；兩個環境 `pip check` 通過。
+- 兩個真實服務都通過公開 5 秒中文 WAV → 每 100 ms WebSocket → 暫定／確認 → SQLite 的檢查，輸出非空中文並保留標點。
+- SenseVoice 通過 Edge 無頭整合：測試 WAV 代替實體麥克風，正式 AudioWorklet／真實模型、收音中原地編輯、自動儲存與鎖定、Stop、JSON 匯出、重新整理後保留修改、窄畫面無水平溢出，沒有瀏覽器錯誤。
+- `tests/caption-ui.cjs` 原地編輯、焦點／草稿、歷史捲動、最新字幕、全螢幕、字級與窄畫面回歸通過。
+- 發現並修正初始 HTML 的「開始收音／新增聽打」在資料尚未載入時過早可點。整合測試改以 segment ID 追蹤句子，避免自動儲存改變狀態後，測試選到下一句。
+
+SenseVoice 使用 `sherpa-onnx==2.0.1`，Small INT8 模型約 240 MB，完整來源與 revision 見比較紀錄。以 OpenCC `s2tw` 轉換臺灣繁體字形；不做 s2twp 的臺灣詞彙替換。測試錄音代替麥克風，不代表使用者實體收音或數小時課堂已驗證。以下各節保留先前版本的測試紀錄，歷史測試數與預設參數以本節及最新 README 為準。
+
 ## 大字字幕與浮動校正介面
 
 2026-11-02：Edge 無頭瀏覽器測試 `tests/caption-ui.cjs` 通過。以模擬 API／WebSocket 與合成麥克風音訊驗證：黑底黃字、自動跟隨、往上閱讀時保留位置、回到最新、收音中開啟浮動校正、草稿與焦點保留、新字幕位於校正視窗下方、儲存鎖定與過期更新保護、空白結果隱藏、拖曳、字級調整、全螢幕，以及縮小畫面後校正視窗仍在可視範圍。檢視桌面與窄螢幕截圖；沒有瀏覽器錯誤。此項測試不代表真實 ASR 品質改善。

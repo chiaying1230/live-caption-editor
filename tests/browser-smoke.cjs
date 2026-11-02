@@ -29,8 +29,10 @@ const path = require('node:path');
     await page.locator('#start').click();
     await page.locator('.segment.provisional').first().waitFor({timeout:120000});
     console.log('provisional subtitle observed');
-    const first = page.locator('.segment.committed').first();
-    await first.waitFor({timeout:120000});
+    const confirmed = page.locator('.segment.committed').first();
+    await confirmed.waitFor({timeout:120000});
+    // Auto-save changes the status class; keep following this segment's ID.
+    const first = page.locator(`.segment[data-id="${await confirmed.getAttribute('data-id')}"]`);
     const original = await first.locator('.segment-text').textContent();
     assert.ok(original.length > 0);
     console.log('real ASR text:',original);

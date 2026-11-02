@@ -13,7 +13,7 @@
 <button id="follow-latest" class="follow-latest" hidden>↓ 回到最新字幕</button><div id="notice" role="alert" hidden></div>
 <footer class="control-dock" aria-label="字幕控制">
 <div class="capture-info"><span id="signal" class="signal"></span><strong id="recording-status" role="status">準備就緒</strong><meter id="input-level" aria-label="輸入音量" min="0" max="100" value="0">0</meter></div>
-<div class="capture-actions"><button id="start" class="primary">● 開始收音</button><button id="stop" disabled>■ 停止</button></div>
+<div class="capture-actions"><button id="start" class="primary" disabled>● 開始收音</button><button id="stop" disabled>■ 停止</button></div>
 <button id="edit-latest">校正字幕</button><label class="font-control" for="caption-size">字級 <input id="caption-size" type="range" min="36" max="112" step="4" value="64"><output id="font-size-value" for="caption-size">64</output></label>
 <button id="fullscreen">⛶ 全螢幕</button><button id="settings-toggle" aria-expanded="false" aria-controls="settings">設定與紀錄</button>
 </footer>
@@ -27,6 +27,6 @@
 <p>像 Word 一樣直接點選已確認的文字修改，停筆後會自動儲存並鎖定；Esc 取消尚未儲存的修改。往上捲動會暫停跟隨，按「回到最新字幕」繼續。</p>
 <div class="export-controls"><label for="export-format">匯出逐字稿<select id="export-format"><option value="txt">TXT · 完整逐字稿</option><option value="json">JSON · 狀態與時間戳</option><option value="srt">SRT · 已確認字幕</option></select></label><button id="export" disabled>↓ 匯出</button></div>
 <section class="glossary-panel" aria-label="糾正字彙表"><h3>糾正字彙表</h3><p>貼上兩欄：錯詞 → 正確詞，每行一組。可從 Excel 複製兩欄貼上。只套用到之後更新的 AI 字幕，不會改動人工校正。</p><label for="glossary-text">錯詞與正確詞</label><textarea id="glossary-text" rows="5" spellcheck="false" placeholder="錯詞 → 正確詞"></textarea><button id="glossary-save">儲存字彙表</button><p id="glossary-status" role="status"></p></section>
-<button id="new-session" class="primary">＋ 新增聽打</button><h3>最近的聽打</h3><nav id="sessions" aria-label="聽打紀錄"></nav><small>本機辨識 · 文字自動儲存</small>
+<button id="new-session" class="primary" disabled>＋ 新增聽打</button><h3>最近的聽打</h3><nav id="sessions" aria-label="聽打紀錄"></nav><small>本機辨識 · 文字自動儲存</small>
 </aside>
 </body></html>

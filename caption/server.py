@@ -88,6 +88,8 @@ def create_app(db_path=None, engine=None):
         return {"ok": True, "model": getattr(engine, "name", "test"), "device": getattr(engine, "device", "test"),
                 "backend": getattr(engine, "backend", "test"), "label": getattr(engine, "label", "Whisper"),
                 "chunk_ms": getattr(engine, "chunk_ms", None),
+                "preview_mode": getattr(engine, "preview_mode", None),
+                "preview_ms": getattr(engine, "preview_frames", 12) * 100,
                 "model_loaded": getattr(engine, "model", None) is not None, "busy": bool(recordings),
                 "capture": next((s.stats() for s in recordings.values() if s is not None), None)}
 
