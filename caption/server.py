@@ -35,6 +35,15 @@ class AudioConfiguration(BaseModel):
     threshold: float = Field(ge=0.0005, le=0.1, allow_inf_nan=False)
 
 
+class GlossaryEntry(BaseModel):
+    source: str = Field(min_length=1,max_length=100)
+    target: str = Field(min_length=1,max_length=100)
+
+
+class GlossaryInput(BaseModel):
+    entries: list[GlossaryEntry] = Field(max_length=500)
+
+
 def same_origin(origin, host):
     if not origin:
         return True  # Local command-line clients do not send Origin.
@@ -78,12 +87,28 @@ def create_app(db_path=None, engine=None):
     def health():
         return {"ok": True, "model": getattr(engine, "name", "test"), "device": getattr(engine, "device", "test"),
                 "backend": getattr(engine, "backend", "test"), "label": getattr(engine, "label", "Whisper"),
+                "chunk_ms": getattr(engine, "chunk_ms", None),
                 "model_loaded": getattr(engine, "model", None) is not None, "busy": bool(recordings),
                 "capture": next((s.stats() for s in recordings.values() if s is not None), None)}
 
     @app.get("/api/sessions")
     def sessions():
         return store.sessions()
+
+    @app.get("/api/glossary")
+    def glossary():
+        return {"entries":store.glossary()}
+
+    @app.put("/api/glossary")
+    def save_glossary(body: GlossaryInput):
+        sources = [entry.source for entry in body.entries]
+        if len(set(sources)) != len(sources) or any(
+            entry.source.strip()!=entry.source or entry.target.strip()!=entry.target or
+            entry.source == entry.target or any(c in entry.source+entry.target for c in '\n\r\t')
+            for entry in body.entries
+        ):
+            raise HTTPException(422,"錯詞不能重複；詞彙需去除頭尾空白，且不能相同或包含換行／Tab。")
+        return {"entries":store.save_glossary(body.entries)}
 
     @app.post("/api/sessions", status_code=201)
     def new_session(body: SessionInput):

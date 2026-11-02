@@ -18,7 +18,7 @@ class FunASREngine:
     max_frames = 200
 
     def __init__(self, online=None, offline=None, converter=None, *, chunk_ms=None):
-        self.chunk_ms = int(chunk_ms or os.getenv("FUNASR_CHUNK_MS", "1800"))
+        self.chunk_ms = int(chunk_ms or os.getenv("FUNASR_CHUNK_MS", "1200"))
         if self.chunk_ms not in (600, 1200, 1800):
             raise ValueError("FUNASR_CHUNK_MS must be 600, 1200 or 1800")
         self.preview_frames = self.chunk_ms // 100
@@ -86,7 +86,7 @@ class ParaformerSession:
         self.consumed = 0
         self.text = ""
 
-    def recognize(self, segid, audio, final):
+    def recognize(self, segid, audio, final, on_update=None):
         self.engine.load()
         with self.engine.lock:
             if final:
@@ -113,4 +113,21 @@ class ParaformerSession:
                 )
                 self.text += result_text(result)
                 self.consumed += self.stride
-            return self.engine.converter.convert(self.text)
+                # Publish each completed chunk, including chunks caught up from a
+                # coalesced snapshot, instead of withholding them until the end.
+                if on_update is not None and self.text:
+                    on_update(self._display_text(), self.consumed)
+            return self._display_text()
+
+    def _display_text(self):
+        text = self.text
+        if text and self.engine.punctuation is not None:
+            # Re-punctuate the provisional sentence; it may change until committed.
+            if getattr(self, "punctuation_source", None) != text:
+                self.punctuation_source = text
+                self.punctuated = result_text(self.engine.punctuation.generate(input=text, disable_pbar=True))
+            text = self.punctuated
+        # The current chunk's end is not necessarily a sentence boundary.
+        return self.engine.converter.convert(text.rstrip('。！？!?，,；;：:、'))
+
+    supports_updates = True

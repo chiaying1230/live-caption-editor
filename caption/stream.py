@@ -39,6 +39,7 @@ class AudioStream:
         self.rms = self.max_rms = 0.0
         self.speech_frames = 0
         self.processing = False
+        self.prefer_preview = True
 
     def stats(self):
         return {"received_seconds": self.frames / 10, "rms": self.rms,
@@ -86,8 +87,8 @@ class AudioStream:
         # Queue overflow is explicit and ends capture, never silently drops audio.
         # Keep this last job too, so Stop can drain all accepted speech.
         self.finals.append(Job(self.segid, np.concatenate(self.active), end, True))
-        if self.preview and self.preview.segid == self.segid:
-            self.preview = None
+        # Keep a pending preview so an utterance ending while the worker is busy
+        # can show text before its slower sentence-final recognition.
         self.segid, self.active, self.quiet = None, [], 0
         self.wake.set()
         if len(self.finals) > 3:
@@ -109,14 +110,27 @@ class AudioStream:
             await self.wake.wait()
             self.wake.clear()
             while self.finals or self.preview:
-                job = self.finals.popleft() if self.finals else self.preview
+                job = self.preview if self.preview and (self.prefer_preview or not self.finals) else self.finals.popleft()
+                self.prefer_preview = job.final
                 if job is self.preview:
                     self.preview = None
+                if not job.final and self.store.get(self.sid, job.segid)["status"] != "provisional":
+                    continue
                 try:
                     self.processing = True
                     await self.send({"type": "recognizing", "final": job.final})
                     if self.recognizer is not None:
-                        text = await asyncio.to_thread(self.recognizer.recognize, job.segid, job.audio, job.final)
+                        if not job.final and getattr(self.recognizer, "supports_updates", False):
+                            loop = asyncio.get_running_loop()
+
+                            def publish(text, consumed):
+                                end = job.end - (len(job.audio) - consumed) / RATE
+                                row = self.store.apply_asr(self.sid, job.segid, text, end, False)
+                                asyncio.run_coroutine_threadsafe(self.send({"type":"segment", "segment":row}), loop).result(timeout=30)
+
+                            text = await asyncio.to_thread(self.recognizer.recognize, job.segid, job.audio, False, publish)
+                        else:
+                            text = await asyncio.to_thread(self.recognizer.recognize, job.segid, job.audio, job.final)
                     else:
                         text = await asyncio.to_thread(self.engine.transcribe, job.audio)
                     row = self.store.apply_asr(self.sid, job.segid, text, job.end, job.final)

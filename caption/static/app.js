@@ -4,23 +4,30 @@ let session = null, segments = new Map(), cards = new Map(), drafts = new Set();
 let state = 'idle', ws = null, context = null, media = null, source = null, processor = null, sink = null;
 let flushResolve = null;
 let polling = false;
+let glossaryDirty = false;
 let navigating = false;
 let inputFrames = 0, lastAudioAt = 0, recordingSince = 0, inputRms = 0, threshold = .003;
 let receivedSeconds = 0, hasRecognizedText = false;
-let following = true, scrollPending = false, editing = null, drag = null;
-const viewport = $('caption-viewport'), editor = $('floating-editor');
+let following = true, scrollPending = false, scrollVersion = 0, currentEdit = null;
+const inlineEdits = new Map();
+const viewport = $('caption-viewport');
+function savingEdits() { return [...inlineEdits.values()].some(edit => edit.saving); }
 
 function followLatest() {
-  if (!following || scrollPending) return;
+  if (!following || currentEdit) return;
   scrollPending = true;
+  const version=++scrollVersion;
   requestAnimationFrame(() => {
+    if(version!==scrollVersion) return;
+    if(!following || currentEdit) { scrollPending=false; return; }
     viewport.scrollTop = viewport.scrollHeight;
-    requestAnimationFrame(() => { scrollPending = false; });
+    requestAnimationFrame(() => { if(version===scrollVersion) scrollPending = false; });
   });
 }
 function setFollowing(value) {
+  if (value && currentEdit) return;
   following = value;
-  $('follow-latest').hidden = value;
+  $('follow-latest').hidden = value || !!currentEdit;
   if (value) followLatest();
 }
 viewport.addEventListener('wheel', event => { if (event.deltaY < 0) setFollowing(false); }, {passive:true});
@@ -33,22 +40,23 @@ viewport.addEventListener('scroll', () => {
   if (scrollPending) return;
   setFollowing(viewport.scrollHeight - viewport.clientHeight - viewport.scrollTop < 24);
 }, {passive:true});
-$('follow-latest').onclick = () => setFollowing(true);
+$('follow-latest').onclick = () => { currentEdit?.element.blur(); setFollowing(true); };
 function layoutCaptionSpace() {
   const dock = document.querySelector('.control-dock').getBoundingClientRect().height;
+  const peek = $('live-peek').hidden ? 0 : $('live-peek').getBoundingClientRect().height;
   document.documentElement.style.setProperty('--dock-space', `${dock}px`);
-  document.documentElement.style.setProperty('--editor-space', `${editor.hidden ? 50 : Math.max(50, editor.getBoundingClientRect().bottom + 12)}px`);
+  document.documentElement.style.setProperty('--peek-space', `${peek}px`);
   followLatest();
 }
 new ResizeObserver(layoutCaptionSpace).observe(document.querySelector('.control-dock'));
-new ResizeObserver(layoutCaptionSpace).observe(editor);
-window.addEventListener('resize', () => {
-  if (!editor.hidden) {
-    editor.style.left = `${Math.max(12, Math.min(editor.offsetLeft, innerWidth - editor.offsetWidth - 12))}px`;
-    editor.style.top = '12px';
-  }
+new ResizeObserver(layoutCaptionSpace).observe($('live-peek'));
+window.addEventListener('resize', layoutCaptionSpace);
+function updateLivePeek() {
+  const row = [...segments.values()].filter(r => /[\p{L}\p{N}]/u.test(r.text)).at(-1);
+  $('live-peek').hidden = !currentEdit || !['recording','stopping'].includes(state) || !row || row.id === currentEdit.id;
+  $('live-peek-text').textContent = row?.text.slice(-140) || '';
   layoutCaptionSpace();
-});
+}
 function setFontSize(value) {
   const size = Math.min(112, Math.max(36, Number(value) || 64));
   $('caption-size').value = size; $('font-size-value').textContent = size;
@@ -74,6 +82,27 @@ $('settings-toggle').onclick = () => showSettings($('settings').hidden);
 $('settings-close').onclick = () => { showSettings(false); $('settings-toggle').focus(); };
 $('settings').addEventListener('keydown', event => { if (event.key === 'Escape') showSettings(false); });
 
+async function loadGlossary() {
+  const data=await api('/api/glossary');
+  $('glossary-text').value=data.entries.map(entry=>`${entry.source} → ${entry.target}`).join('\n');
+  $('glossary-status').textContent=`已儲存 ${data.entries.length} 組 · 只替換明確指定的錯詞`;
+}
+$('glossary-save').onclick=async()=>{
+  const button=$('glossary-save'); button.disabled=true;
+  try {
+    const entries=$('glossary-text').value.split(/\r?\n/).filter(line=>line.trim()).map((line,index)=>{
+      const parts=line.split(/\t+|\s*→\s*|\s*=>\s*/).map(part=>part.trim());
+      if(parts.length!==2 || !parts[0] || !parts[1]) throw new Error(`第 ${index+1} 行請使用「錯詞 → 正確詞」或兩欄 Tab 格式。`);
+      if(parts.some(part=>part.length>100)) throw new Error(`第 ${index+1} 行的詞彙超過 100 字，請縮短。`);
+      return {source:parts[0],target:parts[1]};
+    });
+    if(entries.length>500) throw new Error('最多可儲存 500 組，請先挑選常用的錯詞。');
+    const data=await api('/api/glossary',{method:'PUT',body:JSON.stringify({entries})}); glossaryDirty=false;
+    $('glossary-status').textContent=`已儲存 ${data.entries.length} 組，下次 AI 更新起生效。`; notice();
+  } catch(error) { $('glossary-status').textContent=error.message; }
+  finally { button.disabled=false; }
+};
+$('glossary-text').oninput=()=>{glossaryDirty=true; $('glossary-status').textContent='字彙表尚未儲存';};
 function notice(message = '') { $('notice').textContent = message; $('notice').hidden = !message; }
 async function api(path, options = {}) {
   const response = await fetch(path, {...options, headers: {'Content-Type': 'application/json', ...options.headers}});
@@ -86,12 +115,12 @@ async function api(path, options = {}) {
 function updateControls() {
   $('start').disabled = state !== 'idle' || !session || navigating;
   $('stop').disabled = !['preparing', 'recording'].includes(state);
-  $('new-session').disabled = state !== 'idle' || navigating || !!editing?.saving;
-  $('export').disabled = !session || !segments.size || drafts.size > 0 || navigating || !!editing?.saving;
+  $('new-session').disabled = state !== 'idle' || navigating || savingEdits();
+  $('export').disabled = !session || !segments.size || drafts.size > 0 || navigating || savingEdits();
   $('export').title = drafts.size ? '請先儲存或取消編輯，再匯出' : '';
   $('signal').classList.toggle('live', state === 'recording');
   $('microphone').disabled = state !== 'idle';
-  for (const button of $('sessions').children) button.disabled = state !== 'idle' || navigating || !!editing?.saving;
+  for (const button of $('sessions').children) button.disabled = state !== 'idle' || navigating || savingEdits();
   $('count').textContent = `${segments.size} 段`;
   $('empty').hidden = [...segments.values()].some(row => /[\p{L}\p{N}]/u.test(row.text));
   $('edit-latest').disabled = ![...segments.values()].some(row => row.status !== 'provisional') || navigating;
@@ -100,7 +129,7 @@ function setState(next, detail) {
   state = next;
   $('recording-status').textContent = {idle:'準備就緒',preparing:'準備模型與麥克風',recording:'正在收音',stopping:'收音已停止，正在完成辨識'}[next];
   $('recording-detail').textContent = detail || {idle:'按下開始收音，允許使用麥克風。',preparing:'首次使用需要下載模型，請保持連線。',recording:'暫定字幕會持續更新；稍作停頓後即可編輯。',stopping:'最後一段音訊處理完成後，會保留在逐字稿。'}[next];
-  updateControls();
+  updateControls(); updateLivePeek();
 }
 async function refreshMicrophones() {
   if (!navigator.mediaDevices?.enumerateDevices) return;
@@ -143,104 +172,109 @@ function upsert(row) {
   segments.set(row.id, row);
   let card = cards.get(row.id);
   if (!card) {
-    card = node('article', 'segment');
-    card.dataset.id = row.id;
-    card.append(node('p', 'segment-text'));
-    card.addEventListener('click', () => editSegment(row.id));
-    card.addEventListener('keydown', event => {
-      if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); editSegment(row.id); }
+    card = node('article', 'segment'); card.dataset.id = row.id;
+    const text = node('p', 'segment-text');
+    const tools = node('div', 'inline-tools'); tools.hidden = true;
+    const status = node('span', 'inline-status'), save = node('button', '', '儲存'), cancel = node('button', '', '取消');
+    tools.append(status, save, cancel); card.append(text, tools);
+    text.addEventListener('focus', () => beginInlineEdit(row.id));
+    text.addEventListener('input', () => {
+      const edit = inlineEdits.get(row.id); if (!edit) return;
+      markDirty(edit); clearTimeout(edit.timer);
+      if (!edit.conflict && !edit.composing) edit.timer = setTimeout(() => saveEdit(edit), 1200);
     });
-    cards.set(row.id, card);
-    $('segments').append(card);
+    text.addEventListener('compositionstart', () => {
+      const edit=inlineEdits.get(row.id); if (edit) { edit.composing=true; clearTimeout(edit.timer); }
+    });
+    text.addEventListener('compositionend', () => {
+      const edit=inlineEdits.get(row.id); if (edit) { edit.composing=false; markDirty(edit); edit.timer=setTimeout(()=>saveEdit(edit),1200); }
+    });
+    text.addEventListener('blur', () => {
+      const edit = inlineEdits.get(row.id); if (!edit) return;
+      if (currentEdit === edit) { currentEdit = null; setFollowing(edit.wasFollowing); }
+      saveEdit(edit); updateLivePeek();
+    });
+    text.addEventListener('keydown', event => {
+      if (event.isComposing) return;
+      const edit = inlineEdits.get(row.id); if (!edit) return;
+      if (event.ctrlKey && event.key === 'Enter') { event.preventDefault(); saveEdit(edit); }
+      if (event.key === 'Escape') { event.preventDefault(); cancelEdit(edit); }
+    });
+    // Clicking these controls should not blur the text and start another save.
+    tools.addEventListener('pointerdown', event => event.preventDefault());
+    save.onclick = () => saveEdit(inlineEdits.get(row.id));
+    cancel.onclick = () => cancelEdit(inlineEdits.get(row.id));
+    cards.set(row.id, card); $('segments').append(card);
   }
-  card.className = `segment ${row.status}`;
-  card.hidden = !/[\p{L}\p{N}]/u.test(row.text);
-  card.title = `${labels[row.status]} · ${time(row.start)} — ${time(row.end)}${row.status === 'provisional' ? '' : ' · 點選校正'}`;
-  card.tabIndex = row.status === 'provisional' ? -1 : 0;
-  card.querySelector('.segment-text').textContent = row.text;
-  if (editing) refreshEditorNavigation();
-  updateControls(); followLatest();
+  const edit = inlineEdits.get(row.id), text = card.querySelector('.segment-text');
+  card.className = `segment ${row.status}${edit ? ' editing' : ''}`;
+  card.hidden = !edit && !/[\p{L}\p{N}]/u.test(row.text);
+  card.title = `${labels[row.status]} · ${time(row.start)} — ${time(row.end)}`;
+  text.contentEditable = row.status === 'provisional' ? 'false' : 'plaintext-only';
+  if (row.status !== 'provisional') {
+    text.setAttribute('role','textbox'); text.setAttribute('aria-multiline','true');
+    text.setAttribute('aria-label',`編輯 ${time(row.start)} 字幕`);
+  }
+  if (!edit) text.textContent = row.text;
+  updateControls(); updateLivePeek(); followLatest();
 }
-function editableRows() { return [...segments.values()].filter(row => row.status !== 'provisional'); }
-function refreshEditorNavigation() {
-  const rows = editableRows(), select = $('edit-segment');
-  select.replaceChildren(...rows.map(row => new Option(`${time(row.start)} · ${row.status === 'human_corrected' ? '✓ ' : ''}${row.text.slice(0,70) || '未辨識到文字，可補上'}`, row.id)));
-  select.value = editing?.id || '';
-  const index = rows.findIndex(row => row.id === editing?.id);
-  $('edit-previous').disabled = !!editing?.saving || index <= 0;
-  $('edit-next').disabled = !!editing?.saving || index < 0 || index >= rows.length - 1;
+function markDirty(edit) {
+  const dirty = edit.element.innerText !== edit.original;
+  if (dirty) drafts.add(edit.id); else drafts.delete(edit.id);
+  const card = cards.get(edit.id);
+  card.querySelector('.inline-status').textContent = edit.saving ? '儲存中…' : dirty ? '正在校正 · 停筆後自動儲存' : '點字即可修改 · 自動儲存';
+  card.querySelectorAll('.inline-tools button').forEach(button => { button.disabled = edit.saving; });
+  updateControls();
 }
-function editSegment(id) {
-  const row = segments.get(id);
-  if (!row || row.status === 'provisional' || editing?.saving) return;
-  if (editing?.id === id) { $('correction-text').focus({preventScroll:true}); return; }
-  if (drafts.size) { notice('請先儲存或取消目前的校正，再選另一句。'); refreshEditorNavigation(); return; }
-  editing = {id, revision:row.revision, original:row.text, saving:false};
-  showSettings(false); editor.hidden = false;
-  editor.style.left = `${Math.max(12, Math.min(editor.offsetLeft, innerWidth - editor.offsetWidth - 12))}px`;
-  editor.style.top = '12px';
-  $('correction-text').value = row.text;
-  $('editor-state').textContent = labels[row.status];
-  refreshEditorNavigation(); layoutCaptionSpace();
-  $('correction-text').focus({preventScroll:true}); updateControls(); notice();
+function beginInlineEdit(id) {
+  const row = segments.get(id); if (!row || row.status === 'provisional') return;
+  let edit = inlineEdits.get(id);
+  if (!edit) {
+    edit = {id, sid:session.id, element:cards.get(id).querySelector('.segment-text'), revision:row.revision, original:row.text, saving:false};
+    inlineEdits.set(id,edit);
+  }
+  edit.wasFollowing = following; currentEdit = edit; setFollowing(false);
+  cards.get(id).classList.add('editing'); cards.get(id).querySelector('.inline-tools').hidden = false;
+  showSettings(false); markDirty(edit); updateLivePeek();
 }
-function closeEditor() {
-  if (editing?.saving) return;
-  drafts.clear(); editing = null; editor.hidden = true;
-  layoutCaptionSpace(); updateControls(); $('edit-latest').focus({preventScroll:true}); notice();
+function releaseEdit(edit) {
+  if (currentEdit === edit || drafts.has(edit.id) || edit.saving) return;
+  inlineEdits.delete(edit.id);
+  const card=cards.get(edit.id); if (!card) return;
+  card.classList.remove('editing'); card.querySelector('.inline-tools').hidden = true;
+  card.hidden = !/[\p{L}\p{N}]/u.test(segments.get(edit.id).text);
+}
+async function saveEdit(edit) {
+  if (!edit || edit.saving || edit.composing) return;
+  clearTimeout(edit.timer);
+  const text=edit.element.innerText;
+  if (text === edit.original) { drafts.delete(edit.id); releaseEdit(edit); updateControls(); return; }
+  if (text.length > 20000) { notice('這句超過兩萬字，請縮短後再儲存；輸入仍保留。'); return; }
+  edit.saving = true; markDirty(edit);
+  try {
+    const updated = await api(`/api/sessions/${edit.sid}/segments/${edit.id}`,{method:'PATCH',body:JSON.stringify({text,revision:edit.revision})});
+    edit.revision=updated.revision; edit.original=updated.text; edit.conflict=false;
+    upsert(updated); notice();
+  } catch(error) {
+    edit.conflict=true; notice(error.message + ' 你的修改仍在原句；請先複製文字再取消或重新載入。');
+  } finally {
+    edit.saving=false; markDirty(edit); releaseEdit(edit);
+    if (drafts.has(edit.id) && !edit.conflict) edit.timer=setTimeout(()=>saveEdit(edit),1200);
+  }
+}
+function cancelEdit(edit) {
+  if (!edit || edit.saving) return;
+  clearTimeout(edit.timer);
+  const row=segments.get(edit.id); edit.element.textContent=row.text;
+  edit.original=row.text; drafts.delete(edit.id); edit.element.blur();
+  inlineEdits.delete(edit.id); cards.get(edit.id).classList.remove('editing');
+  cards.get(edit.id).querySelector('.inline-tools').hidden=true;
+  cards.get(edit.id).hidden=!/[\p{L}\p{N}]/u.test(row.text); notice(); updateControls();
 }
 $('edit-latest').onclick = () => {
-  const rows = editableRows(), row = rows.filter(r => /[\p{L}\p{N}]/u.test(r.text)).at(-1) || rows.at(-1);
-  if (row) editSegment(row.id);
+  const row=[...segments.values()].filter(r=>r.status !== 'provisional' && /[\p{L}\p{N}]/u.test(r.text)).at(-1);
+  if (row) cards.get(row.id).querySelector('.segment-text').focus();
 };
-$('editor-close').onclick = $('editor-cancel').onclick = closeEditor;
-$('edit-segment').onchange = event => editSegment(event.target.value);
-for (const [button, direction] of [['edit-previous',-1],['edit-next',1]]) {
-  $(button).onclick = () => { const rows = editableRows(), index = rows.findIndex(row => row.id === editing?.id); if (rows[index + direction]) editSegment(rows[index + direction].id); };
-}
-$('correction-text').oninput = () => {
-  if (!editing) return;
-  const dirty = $('correction-text').value !== editing.original;
-  if (dirty) drafts.add(editing.id); else drafts.delete(editing.id);
-  $('editor-state').textContent = dirty ? '尚未儲存' : labels[segments.get(editing.id).status]; updateControls();
-};
-$('correction-form').onsubmit = async event => {
-  event.preventDefault(); if (!editing || editing.saving) return;
-  const current = editing; current.saving = true;
-  updateControls();
-  for (const id of ['editor-save','editor-cancel','editor-close','edit-segment','correction-text']) $(id).disabled = true;
-  refreshEditorNavigation();
-  try {
-    const updated = await api(`/api/sessions/${session.id}/segments/${current.id}`, {method:'PATCH', body:JSON.stringify({text:$('correction-text').value,revision:current.revision})});
-    upsert(updated); current.revision = updated.revision; current.original = updated.text;
-    drafts.delete(current.id); $('editor-state').textContent = '✓ 已儲存並鎖定'; notice();
-  } catch (error) { notice(error.message + ' 你的輸入仍保留在校正視窗。'); }
-  finally {
-    current.saving = false;
-    for (const id of ['editor-save','editor-cancel','editor-close','edit-segment','correction-text']) $(id).disabled = false;
-    refreshEditorNavigation(); updateControls(); $('correction-text').focus({preventScroll:true});
-  }
-};
-$('correction-text').onkeydown = event => {
-  if (event.isComposing) return;
-  if (event.ctrlKey && event.key === 'Enter') { event.preventDefault(); $('correction-form').requestSubmit(); }
-  if (event.key === 'Escape') { event.preventDefault(); closeEditor(); }
-};
-$('editor-handle').onpointerdown = event => {
-  if (event.target.closest('button') || event.button !== 0) return;
-  const bounds = editor.getBoundingClientRect();
-  drag = {x:event.clientX - bounds.left, y:event.clientY - bounds.top};
-  $('editor-handle').setPointerCapture(event.pointerId);
-};
-$('editor-handle').onpointermove = event => {
-  if (!drag) return;
-  editor.style.left = `${Math.max(12,Math.min(innerWidth - editor.offsetWidth - 12,event.clientX - drag.x))}px`;
-  // Keep the correction window in the upper part and reserve space below it.
-  const maxTop = Math.max(12,Math.min(innerHeight * .28, innerHeight - editor.offsetHeight - document.querySelector('.control-dock').offsetHeight - 110));
-  editor.style.top = `${Math.max(12,Math.min(maxTop,event.clientY - drag.y))}px`;
-  layoutCaptionSpace();
-};
-$('editor-handle').onpointerup = $('editor-handle').onpointercancel = () => { drag = null; };
 async function loadSessions() {
   const rows = await api('/api/sessions');
   $('sessions').replaceChildren();
@@ -254,7 +288,7 @@ async function loadSessions() {
   return rows;
 }
 async function openSession(id) {
-  if (state !== 'idle' || navigating || editing?.saving) return;
+  if (state !== 'idle' || navigating || savingEdits()) return;
   if (drafts.size) { notice('請先儲存或取消編輯，再切換聽打。'); return; }
   navigating = true; updateControls();
   try { await selectSession(id); }
@@ -262,7 +296,7 @@ async function openSession(id) {
 }
 async function selectSession(id) {
   const data = await api(`/api/sessions/${id}`);
-  closeEditor(); setFollowing(true); showSettings(false);
+  inlineEdits.clear(); currentEdit=null; setFollowing(true); showSettings(false); updateLivePeek();
   session = data.session;
   localStorage.setItem('caption-session', session.id);
   $('title').textContent = session.title;
@@ -272,7 +306,7 @@ async function selectSession(id) {
   notice(data.recording ? '這場聽打仍在其他頁面收音或處理中；請先在原頁面停止。' : data.segments.some(r => r.status === 'provisional') ? '有上次中斷留下的暫定字幕，尚未經 AI 確認；TXT 與 JSON 匯出會保留並標示。' : '');
 }
 async function newSession() {
-  if (state !== 'idle' || navigating || editing?.saving) return;
+  if (state !== 'idle' || navigating || savingEdits()) return;
   if (drafts.size) { notice('請先儲存或取消編輯，再新增聽打。'); return; }
   navigating = true; updateControls();
   try {
@@ -391,7 +425,7 @@ $('export').onclick = () => {
   anchor.download = ''; anchor.click();
 };
 window.addEventListener('beforeunload', event => {
-  if (drafts.size || state !== 'idle') { event.preventDefault(); event.returnValue = ''; }
+  if (drafts.size || glossaryDirty || savingEdits() || state !== 'idle') { event.preventDefault(); event.returnValue = ''; }
 });
 // Recover updates completed after a disconnected page and show corrections
 // from another tab. upsert preserves open drafts and ignores older revisions.
@@ -407,6 +441,7 @@ setInterval(async () => {
 }, 3000);
 try {
   await refreshMicrophones().catch(() => {});
+  await loadGlossary();
   const health = await api('/api/health'); $('model').textContent = `${health.label || 'Whisper'} ${health.model} · ${health.device.toUpperCase()}`;
   const rows = await loadSessions(), stored = localStorage.getItem('caption-session');
   if (rows.length) await openSession(rows.some(r => r.id === stored) ? stored : rows[0].id);

@@ -2,13 +2,14 @@
 <html lang="zh-Hant">
 <head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-<title>即時字幕</title><link rel="stylesheet" href="/static/style.css?v=2"><script src="/static/app.js?v=2" type="module"></script>
+<title>即時字幕</title><link rel="stylesheet" href="/static/style.css?v=3"><script src="/static/app.js?v=3" type="module"></script>
 </head>
 <body>
 <header class="screen-header"><span class="brand">即時字幕</span><span id="title">新的聽打</span><span id="count">0 段</span></header>
 <main id="caption-viewport" tabindex="0" aria-label="字幕，可捲動查看前文"><div class="caption-page">
 <div id="empty" class="empty"><p>讓文字，跟上聲音。</p><small>按下「開始收音」，字幕會一句一句出現。</small></div>
 <section id="segments" aria-label="即時字幕"></section></div></main>
+<section id="live-peek" class="live-peek" aria-label="校正時的最新字幕" hidden><small>最新字幕 · 持續收音</small><p id="live-peek-text"></p></section>
 <button id="follow-latest" class="follow-latest" hidden>↓ 回到最新字幕</button><div id="notice" role="alert" hidden></div>
 <footer class="control-dock" aria-label="字幕控制">
 <div class="capture-info"><span id="signal" class="signal"></span><strong id="recording-status" role="status">準備就緒</strong><meter id="input-level" aria-label="輸入音量" min="0" max="100" value="0">0</meter></div>
@@ -23,14 +24,9 @@
 <label>收音靈敏度<select id="sensitivity"><option value="">依預設</option><option value="0.001">高 · 適合小聲說話</option><option value="0.003">一般</option><option value="0.012">低 · 適合吵雜環境</option></select></label>
 <p id="audio-status" role="status">開始後，請確認音量條會隨說話變化。</p>
 <div class="legend"><span>虛線底線：暫定字幕</span><span>一般文字：AI 確認</span><span>✓：人工校正並鎖定</span></div>
-<p>點選已確認的句子，可在上方小視窗校正。往上捲動會暫停跟隨，按「回到最新字幕」繼續。</p>
+<p>像 Word 一樣直接點選已確認的文字修改，停筆後會自動儲存並鎖定；Esc 取消尚未儲存的修改。往上捲動會暫停跟隨，按「回到最新字幕」繼續。</p>
 <div class="export-controls"><label for="export-format">匯出逐字稿<select id="export-format"><option value="txt">TXT · 完整逐字稿</option><option value="json">JSON · 狀態與時間戳</option><option value="srt">SRT · 已確認字幕</option></select></label><button id="export" disabled>↓ 匯出</button></div>
+<section class="glossary-panel" aria-label="糾正字彙表"><h3>糾正字彙表</h3><p>貼上兩欄：錯詞 → 正確詞，每行一組。可從 Excel 複製兩欄貼上。只套用到之後更新的 AI 字幕，不會改動人工校正。</p><label for="glossary-text">錯詞與正確詞</label><textarea id="glossary-text" rows="5" spellcheck="false" placeholder="錯詞 → 正確詞"></textarea><button id="glossary-save">儲存字彙表</button><p id="glossary-status" role="status"></p></section>
 <button id="new-session" class="primary">＋ 新增聽打</button><h3>最近的聽打</h3><nav id="sessions" aria-label="聽打紀錄"></nav><small>本機辨識 · 文字自動儲存</small>
 </aside>
-<section id="floating-editor" class="floating-editor" role="region" aria-label="浮動字幕校正" hidden>
-<div id="editor-handle" class="editor-handle"><strong>字幕校正 <small>拖曳此處移動</small></strong><button id="editor-close" aria-label="關閉校正視窗">✕</button></div>
-<form id="correction-form"><div class="editor-navigation"><button id="edit-previous" type="button" aria-label="前一句">←</button><label class="sr-only" for="edit-segment">選擇要校正的句子</label><select id="edit-segment"></select><button id="edit-next" type="button" aria-label="後一句">→</button></div>
-<label class="sr-only" for="correction-text">校正字幕文字</label><textarea id="correction-text" maxlength="20000" rows="2"></textarea>
-<div class="edit-actions"><span id="editor-state"></span><small>Ctrl + Enter 儲存 · Esc 取消</small><button id="editor-cancel" type="button">取消</button><button id="editor-save" class="primary" type="submit">儲存並鎖定</button></div>
-</form></section>
 </body></html>

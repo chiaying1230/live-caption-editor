@@ -93,3 +93,50 @@ def test_final_punctuation_is_applied_before_conversion():
     engine = FunASREngine(Online(), Offline(), Converter(), chunk_ms=600)
     engine.punctuation = Punctuation()
     assert engine.new_session().recognize('a', np.zeros(1600,np.float32), True) == '完整校正。'
+
+
+def test_coalesced_previews_publish_each_chunk_with_punctuation():
+    class Punctuation:
+        def __init__(self):
+            self.inputs = []
+        def generate(self, *, input, **kwargs):
+            self.inputs.append(input)
+            return [{'text':input[:1] + '，' + input[1:] + '。'}]
+    engine = FunASREngine(Online(), Offline(), Converter(), chunk_ms=1200)
+    engine.punctuation = Punctuation()
+    recognizer = engine.new_session()
+    events = []
+    text = recognizer.recognize('a', np.zeros(57600,np.float32), False,
+                                lambda text, consumed: events.append((text,consumed)))
+    assert events == [('1',19200),('1，2',38400),('1，23',57600)]
+    assert text == '1，23'
+    assert engine.punctuation.inputs == ['1','12','123']  # No duplicate final call.
+
+
+def test_pending_preview_is_delivered_before_slower_final(tmp_path):
+    import asyncio
+    from caption.store import Store
+    from caption.stream import AudioStream
+    async def scenario():
+        store = Store(tmp_path/'pending.db')
+        sid = store.create_session('待處理預覽')['id']
+        engine = FunASREngine(Online(), Offline(), Converter(), chunk_ms=600)
+        events = []
+        async def send(event):
+            events.append(event)
+        stream = AudioStream(store,sid,engine,send)
+        # Simulate the worker being busy until after a pause has queued a final.
+        for _ in range(18):
+            await stream.feed(VOICE)
+        for _ in range(8):
+            await stream.feed(SILENCE)
+        await stream.finish()
+        await stream.run()
+        rows=[e['segment'] for e in events if e['type']=='segment' and e['segment']['text']]
+        assert rows[0]['status']=='provisional'
+        assert rows[0]['text']=='1'
+        assert any(r['text']=='12' for r in rows[:-1])
+        assert rows[-1]['status']=='committed' and rows[-1]['text']=='完整校正'
+        assert all(a['end']<=b['end'] for a,b in zip(rows,rows[1:]))
+        store.close()
+    asyncio.run(scenario())

@@ -1,5 +1,6 @@
 """SQLite is the authority for text and lock state, including late ASR results."""
 import json
+import re
 import sqlite3
 import threading
 import uuid
@@ -32,6 +33,9 @@ class Store:
                 revision INTEGER NOT NULL DEFAULT 0, updated_at TEXT NOT NULL
             );
             CREATE INDEX IF NOT EXISTS segment_session ON segments(session_id,start);
+            CREATE TABLE IF NOT EXISTS glossary (
+                source TEXT PRIMARY KEY, target TEXT NOT NULL
+            );
         """)
 
     def create_session(self, title):
@@ -81,10 +85,26 @@ class Store:
         # Atomic predicate: even a stale ASR worker can never overwrite a human edit
         # or downgrade a committed segment back to provisional.
         with self.lock, self.db:
+            terms = dict(self.db.execute("SELECT source,target FROM glossary"))
+            if terms:
+                # One pass, longest match first: replacements cannot cascade.
+                pattern = "|".join(re.escape(source) for source in sorted(terms,key=len,reverse=True))
+                text = re.sub(pattern, lambda match: terms[match.group()], text)
             self.db.execute("""UPDATE segments SET text=?,end=?,status=?,revision=revision+1,updated_at=?
                 WHERE session_id=? AND id=? AND locked=0 AND status='provisional'""",
                 (text, end, "committed" if final else "provisional", now(), sid, segid))
             return self.get(sid, segid)
+
+    def glossary(self):
+        with self.lock:
+            return [dict(row) for row in self.db.execute("SELECT source,target FROM glossary ORDER BY source")]
+
+    def save_glossary(self, entries):
+        with self.lock, self.db:
+            self.db.execute("DELETE FROM glossary")
+            self.db.executemany("INSERT INTO glossary(source,target) VALUES (?,?)",
+                                [(entry.source,entry.target) for entry in entries])
+        return self.glossary()
 
     def correct(self, sid, segid, text, revision):
         with self.lock, self.db:
