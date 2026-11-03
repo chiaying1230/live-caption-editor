@@ -16,6 +16,7 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 from .asr import create_engine
 from .store import Store, export_transcript
 from .stream import AudioStream
+from .recording import AudioArchive, RecordingError
 
 log = logging.getLogger("uvicorn.error")
 STATIC = Path(__file__).parent / "static"
@@ -52,7 +53,9 @@ def same_origin(origin, host):
 
 
 def create_app(db_path=None, engine=None):
-    store = Store(db_path or Path(os.getenv("DATA_DIR", "data")) / "captions.sqlite3")
+    database = Path(db_path or Path(os.getenv("DATA_DIR", "data")) / "captions.sqlite3")
+    store = Store(database)
+    archive = AudioArchive(store, database.parent / 'recordings')
     engine = engine or create_engine()
     recordings = {}
 
@@ -118,7 +121,27 @@ def create_app(db_path=None, engine=None):
 
     @app.get("/api/sessions/{sid}")
     def get_session(sid: str):
-        return {"session": session_or_404(sid), "segments": store.segments(sid), "recording": sid in recordings}
+        return {"session": session_or_404(sid), "segments": store.segments(sid),
+                "recording": sid in recordings, "recordings": store.audio_recordings(sid)}
+
+    @app.get('/api/sessions/{sid}/recordings')
+    def list_recordings(sid: str):
+        session_or_404(sid)
+        return {'recordings': store.audio_recordings(sid)}
+
+    @app.get('/api/sessions/{sid}/recordings/{rid}/audio')
+    def recording_audio(sid: str, rid: str, download: bool = False):
+        session_or_404(sid)
+        row = next((r for r in store.audio_recordings(sid) if r['id']==rid), None)
+        if not row:
+            raise HTTPException(404, '找不到這份錄音。')
+        if row['status']=='recording':
+            raise HTTPException(409, '錄音中，請停止收音後再回放或下載。')
+        path = archive.path(row['id'])
+        if not path.is_file():
+            raise HTTPException(404, '錄音檔不存在，請確認本機備份。')
+        return FileResponse(path, media_type='audio/wav', filename=f'recording-{rid}.wav',
+                            content_disposition_type='attachment' if download else 'inline')
 
     @app.patch("/api/sessions/{sid}/segments/{segid}")
     def correct(sid: str, segid: str, body: Correction):
@@ -134,7 +157,7 @@ def create_app(db_path=None, engine=None):
     def export(sid: str, fmt: str):
         if fmt not in ("txt", "json", "srt"):
             raise HTTPException(404, "支援 TXT、JSON 與 SRT。")
-        result = export_transcript(session_or_404(sid), store.segments(sid), fmt)
+        result = export_transcript(session_or_404(sid), store.segments(sid), fmt, store.audio_recordings(sid))
         media = "application/json" if fmt == "json" else "text/plain"
         # UTF-8 BOM makes Chinese TXT straightforward in Windows Notepad/Excel.
         content = ("\ufeff" + result) if fmt == "txt" else result
@@ -161,13 +184,15 @@ def create_app(db_path=None, engine=None):
             await ws.close(code=1008)
             return
         recordings[sid] = None  # Reserve before the first await; one capture per server.
-        stream = None
+        stream = wav = None
+        normal_stop = False
         worker = receiver = None
         try:
             await send({"type": "loading", "message": "正在準備辨識模型；首次會下載，請稍候。"})
             await asyncio.to_thread(engine.load)
             stream = AudioStream(store, sid, engine, send,
                                  threshold=float(os.getenv("VOICE_THRESHOLD", "0.003")))
+            wav = archive.start(sid, stream.offset)
             recordings[sid] = stream
             worker = asyncio.create_task(stream.run())
             await send({"type": "ready", "offset": stream.offset, "threshold": stream.threshold})
@@ -183,16 +208,21 @@ def create_app(db_path=None, engine=None):
                     connected = False
                     break
                 if message.get("bytes") is not None:
+                    wav.write(message['bytes'])
                     await stream.feed(message["bytes"])
                 elif message.get("text"):
                     command = json.loads(message["text"])
                     if command == {"type": "stop"}:
+                        normal_stop = True
                         break
                     config = AudioConfiguration.model_validate(command)
                     stream.threshold = config.threshold
                     await send({"type": "configured", "threshold": stream.threshold})
         except WebSocketDisconnect:
             connected = False
+        except RecordingError:
+            log.exception('Audio recording failed')
+            await send({'type':'error', 'message':'錄音無法寫入，已停止收音。請確認磁碟空間及資料夾是否可寫入。'})
         except (ValueError, json.JSONDecodeError) as exc:
             await send({"type": "error", "message": str(exc)})
         except Exception:
@@ -201,6 +231,12 @@ def create_app(db_path=None, engine=None):
         finally:
             if receiver and not receiver.done():
                 receiver.cancel()
+            if wav:
+                try:
+                    wav.finish(interrupted=not normal_stop)
+                except Exception:
+                    log.exception('Audio recording finalization failed')
+                    await send({'type':'error', 'message':'錄音保存未完整完成，請檢查本機磁碟與錄音檔。'})
             try:
                 if stream:
                     await stream.finish()

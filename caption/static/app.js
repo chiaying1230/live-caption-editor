@@ -5,6 +5,7 @@ let state = 'idle', ws = null, context = null, media = null, source = null, proc
 let flushResolve = null;
 let polling = false;
 let glossaryDirty = false;
+let recordingSignature = '';
 let navigating = false;
 let inputFrames = 0, lastAudioAt = 0, recordingSince = 0, inputRms = 0, threshold = .003;
 let receivedSeconds = 0, hasRecognizedText = false;
@@ -110,6 +111,7 @@ function updateControls() {
   $('export').disabled = !session || !segments.size || drafts.size > 0 || navigating || savingEdits();
   $('export').title = drafts.size ? '請先儲存或取消編輯，再匯出' : '';
   $('signal').classList.toggle('live', state === 'recording');
+  $('audio-saving').hidden = !['recording','stopping'].includes(state);
   $('microphone').disabled = state !== 'idle';
   for (const button of $('sessions').children) button.disabled = state !== 'idle' || navigating || savingEdits();
   $('count').textContent = `${segments.size} 段`;
@@ -121,6 +123,37 @@ function setState(next, detail) {
   $('recording-status').textContent = {idle:'準備就緒',preparing:'準備模型與麥克風',recording:'正在收音',stopping:'收音已停止，正在完成辨識'}[next];
   $('recording-detail').textContent = detail || {idle:'按下開始收音，允許使用麥克風。',preparing:'首次使用需要下載模型，請保持連線。',recording:'暫定字幕會持續更新；稍作停頓後即可編輯。',stopping:'最後一段音訊處理完成後，會保留在逐字稿。'}[next];
   updateControls();
+  if (['recording','stopping'].includes(state)) $('audio-recording-status').textContent = state==='recording' ? '同步錄音中，包含停頓與尚未辨識出文字的聲音。' : '正在保存錄音並完成字幕，請稍候。';
+}
+
+function renderRecordings(rows=[]) {
+  const signature=JSON.stringify([session?.id,rows]);
+  if (signature!==recordingSignature) {
+    recordingSignature=signature;
+    $('recordings').replaceChildren();
+    for (const row of rows) {
+      const item=node('div','recording-item');
+      const duration=Math.round(row.duration);
+      item.append(node('p','',`${new Date(row.created_at).toLocaleString('zh-TW')} · ${Math.floor(duration/60)} 分 ${duration%60} 秒 · 字幕 ${time(row.start)} 起`));
+      if (row.status==='recording') item.append(node('small','','錄音中，停止後可回放與下載。'));
+      else {
+        if (row.status==='interrupted') item.append(node('small','','收音曾中斷，已保留收到的錄音。'));
+        const url=`/api/sessions/${session.id}/recordings/${row.id}/audio`;
+        const player=node('audio'); player.controls=true; player.preload='none'; player.src=url;
+        const download=node('a','recording-download','↓ 下載 WAV 錄音');
+        download.href=`${url}?download=true`; download.download='';
+        item.append(player,download);
+      }
+      $('recordings').append(item);
+    }
+  }
+  if (state==='idle') $('audio-recording-status').textContent=rows.length ? '錄音已保存在本機。可回放或下載；再次收音會另存一份。' : '開始收音時會同步保存錄音；舊字幕沒有錄音檔。只保存在這台電腦。';
+}
+async function refreshRecordings() {
+  const sid=session?.id;
+  if (!sid) return;
+  const data=await api(`/api/sessions/${sid}`);
+  if (session?.id===sid) renderRecordings(data.recordings);
 }
 async function refreshMicrophones() {
   if (!navigator.mediaDevices?.enumerateDevices) return;
@@ -289,6 +322,7 @@ async function selectSession(id) {
   const data = await api(`/api/sessions/${id}`);
   inlineEdits.clear(); currentEdit=null; setFollowing(true); showSettings(false);
   session = data.session;
+  renderRecordings(data.recordings);
   localStorage.setItem('caption-session', session.id);
   $('title').textContent = session.title;
   segments.clear(); cards.clear(); $('segments').replaceChildren();
@@ -398,7 +432,7 @@ function startCapture() {
       }
     }
     if (data.type === 'error') { notice(data.message); stopCapture(); }
-    if (data.type === 'stopped') { releaseAudio(); setState('idle','辨識已完成。文字已存入本機，可繼續校正或匯出。'); }
+    if (data.type === 'stopped') { releaseAudio(); setState('idle','字幕與錄音已保存，可在設定與紀錄回放或下載。'); refreshRecordings().catch(error=>notice(error.message)); }
   };
   socket.onerror = () => notice('連線失敗。請確認本機服務仍在執行。');
   socket.onclose = () => {
@@ -426,7 +460,10 @@ setInterval(async () => {
   const sid = session.id;
   try {
     const data = await api(`/api/sessions/${sid}`);
-    if (session?.id === sid && state === 'idle' && !navigating) for (const row of data.segments) upsert(row);
+    if (session?.id === sid && state === 'idle' && !navigating) {
+      for (const row of data.segments) upsert(row);
+      renderRecordings(data.recordings);
+    }
   } catch { /* Keep the saved view usable during a brief server restart. */ }
   finally { polling = false; }
 }, 3000);

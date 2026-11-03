@@ -12,3 +12,5 @@
 .inline-tools button{padding:5px 12px}.inline-status{margin-right:auto}
 
 .glossary-panel{border-top:1px solid #444;margin-top:18px}.glossary-panel textarea{font-size:16px;min-height:120px}.glossary-panel button{margin-top:10px}
+
+.recordings-panel{border-top:1px solid #444;margin-top:18px}.recording-item{border-bottom:1px solid #333;padding:8px 0 16px}.recording-item p{font-size:12px}.recording-item small{display:block;margin-bottom:8px;color:#ffe55a}.recording-item audio{display:block;width:100%;height:40px;margin:8px 0}.recording-download{display:inline-block;color:#ffe55a;padding:8px 0}#audio-saving{color:#ffe55a;white-space:nowrap}

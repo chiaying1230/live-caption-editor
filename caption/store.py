@@ -36,6 +36,13 @@ class Store:
             CREATE TABLE IF NOT EXISTS glossary (
                 source TEXT PRIMARY KEY, target TEXT NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS audio_recordings (
+                id TEXT PRIMARY KEY,
+                session_id TEXT NOT NULL REFERENCES sessions(id),
+                start REAL NOT NULL, samples INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL,
+                status TEXT NOT NULL CHECK(status IN ('recording','complete','interrupted'))
+            );
         """)
 
     def create_session(self, title):
@@ -72,7 +79,42 @@ class Store:
 
     def offset(self, sid):
         with self.lock:
-            return float(self.db.execute("SELECT COALESCE(MAX(end),0) FROM segments WHERE session_id=?", (sid,)).fetchone()[0])
+            return float(self.db.execute("""SELECT COALESCE(MAX(end),0) FROM (
+                SELECT end FROM segments WHERE session_id=? UNION ALL
+                SELECT start + samples / 16000.0 FROM audio_recordings WHERE session_id=?
+            )""", (sid,sid)).fetchone()[0])
+
+    def begin_recording(self, sid, start):
+        row = dict(id=uuid.uuid4().hex, session_id=sid, start=start, samples=0,
+                   created_at=now(), status='recording')
+        with self.lock, self.db:
+            self.db.execute("""INSERT INTO audio_recordings
+                (id,session_id,start,samples,created_at,status)
+                VALUES (:id,:session_id,:start,:samples,:created_at,:status)""", row)
+        return row
+
+    def update_recording(self, rid, samples, status='recording'):
+        with self.lock, self.db:
+            self.db.execute('UPDATE audio_recordings SET samples=?,status=? WHERE id=?', (samples,status,rid))
+
+    def discard_recording(self, rid):
+        with self.lock, self.db:
+            self.db.execute('DELETE FROM audio_recordings WHERE id=?', (rid,))
+
+    def audio_recordings(self, sid=None, *, unfinished=False):
+        query = 'SELECT * FROM audio_recordings'
+        params = ()
+        if unfinished:
+            query += " WHERE status='recording'"
+        elif sid is not None:
+            query += ' WHERE session_id=?'
+            params = (sid,)
+        with self.lock:
+            rows = [dict(row) for row in self.db.execute(query+' ORDER BY created_at,id', params)]
+        for row in rows:
+            row['duration'] = row['samples'] / 16000
+            row['end'] = row['start'] + row['duration']
+        return rows
 
     def begin(self, sid, start, end):
         segid = uuid.uuid4().hex
@@ -131,9 +173,12 @@ def timestamp(seconds, srt=False):
     return f"{hours:02}:{minutes:02}:{secs:02}{',' if srt else '.'}{ms:03}"
 
 
-def export_transcript(session, segments, fmt):
+def export_transcript(session, segments, fmt, recordings=None):
     if fmt == "json":
-        return json.dumps({"schema_version": 1, "session": session, "segments": segments}, ensure_ascii=False, indent=2)
+        result = {"schema_version": 1, "session": session, "segments": segments}
+        if recordings is not None:
+            result['recordings'] = recordings
+        return json.dumps(result, ensure_ascii=False, indent=2)
     if fmt == "srt":
         return "\n\n".join(f"{i}\n{timestamp(r['start'], True)} --> {timestamp(r['end'], True)}\n{r['text']}"
                            for i, r in enumerate((r for r in segments if r["status"] != "provisional" and r["text"]), 1)) + "\n"
