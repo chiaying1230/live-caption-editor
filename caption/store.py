@@ -6,10 +6,18 @@ import threading
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
+from .corrections import term_changes
 
 
 def now():
     return datetime.now(timezone.utc).isoformat()
+
+
+def replace_terms(text, terms):
+    if not terms:
+        return text
+    pattern='|'.join(re.escape(source) for source in sorted(terms,key=len,reverse=True))
+    return re.sub(pattern,lambda match:terms[match.group()],text)
 
 
 class Store:
@@ -43,6 +51,22 @@ class Store:
                 created_at TEXT NOT NULL,
                 status TEXT NOT NULL CHECK(status IN ('recording','complete','interrupted'))
             );
+            CREATE TABLE IF NOT EXISTS correction_history (
+                segment_id TEXT PRIMARY KEY REFERENCES segments(id),
+                session_id TEXT NOT NULL REFERENCES sessions(id),
+                original_text TEXT NOT NULL, corrected_text TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS asr_baselines (
+                segment_id TEXT PRIMARY KEY REFERENCES segments(id), text TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS correction_terms (
+                segment_id TEXT NOT NULL REFERENCES segments(id),
+                source TEXT NOT NULL, target TEXT NOT NULL, updated_at TEXT NOT NULL,
+                PRIMARY KEY(segment_id,source,target)
+            );
+            CREATE TABLE IF NOT EXISTS disabled_correction_terms (source TEXT PRIMARY KEY);
+            CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY,value TEXT NOT NULL);
         """)
 
     def create_session(self, title):
@@ -127,11 +151,14 @@ class Store:
         # Atomic predicate: even a stale ASR worker can never overwrite a human edit
         # or downgrade a committed segment back to provisional.
         with self.lock, self.db:
-            terms = dict(self.db.execute("SELECT source,target FROM glossary"))
-            if terms:
-                # One pass, longest match first: replacements cannot cascade.
-                pattern = "|".join(re.escape(source) for source in sorted(terms,key=len,reverse=True))
-                text = re.sub(pattern, lambda match: terms[match.group()], text)
+            terms = {r['source']:r['target'] for r in self.remembered_terms() if r['active']}
+            manual=dict(self.db.execute("SELECT source,target FROM glossary"))
+            baseline=replace_terms(text,manual)
+            terms.update(manual)
+            text=replace_terms(text,terms)  # One pass, longest first; never cascade.
+            current=self.get(sid,segid)
+            if current and current['status']=='provisional' and not current['locked']:
+                self.db.execute('INSERT OR REPLACE INTO asr_baselines VALUES (?,?)',(segid,baseline))
             self.db.execute("""UPDATE segments SET text=?,end=?,status=?,revision=revision+1,updated_at=?
                 WHERE session_id=? AND id=? AND locked=0 AND status='provisional'""",
                 (text, end, "committed" if final else "provisional", now(), sid, segid))
@@ -148,6 +175,47 @@ class Store:
                                 [(entry.source,entry.target) for entry in entries])
         return self.glossary()
 
+    def remember_enabled(self):
+        with self.lock:
+            row=self.db.execute("SELECT value FROM settings WHERE key='remember_corrections'").fetchone()
+            return not row or row[0]=='1'
+
+    def set_remember_enabled(self, enabled):
+        with self.lock, self.db:
+            self.db.execute("INSERT OR REPLACE INTO settings VALUES ('remember_corrections',?)", ('1' if enabled else '0',))
+
+    def remembered_terms(self):
+        with self.lock:
+            rows=[dict(r) for r in self.db.execute('''SELECT source,target,COUNT(*) AS examples,
+                MAX(updated_at) AS updated_at FROM correction_terms GROUP BY source,target
+                ORDER BY updated_at DESC''')]
+            disabled={r[0] for r in self.db.execute('SELECT source FROM disabled_correction_terms')}
+            manual=dict(self.db.execute('SELECT source,target FROM glossary'))
+        targets={}
+        for row in rows:
+            targets.setdefault(row['source'],set()).add(row['target'])
+        pairs={(r['source'],r['target']) for r in rows}
+        for row in rows:
+            row['conflict']=len(targets[row['source']])>1 or (row['target'],row['source']) in pairs
+            row['enabled']=row['source'] not in disabled
+            row['manual_override']=row['source'] in manual
+            row['active']=row['enabled'] and not row['conflict'] and not row['manual_override']
+        return rows[:500]
+
+    def set_remembered_term(self, source, enabled):
+        with self.lock, self.db:
+            if not self.db.execute('SELECT 1 FROM correction_terms WHERE source=?',(source,)).fetchone():
+                raise KeyError(source)
+            if enabled:
+                self.db.execute('DELETE FROM disabled_correction_terms WHERE source=?',(source,))
+            else:
+                self.db.execute('INSERT OR IGNORE INTO disabled_correction_terms VALUES (?)',(source,))
+
+    def correction_history(self, *, limit=100):
+        with self.lock:
+            return [dict(r) for r in self.db.execute(
+                'SELECT * FROM correction_history ORDER BY updated_at DESC LIMIT ?', (limit,))]
+
     def correct(self, sid, segid, text, revision):
         with self.lock, self.db:
             row = self.get(sid, segid)
@@ -157,6 +225,23 @@ class Store:
                 raise ValueError("暫定字幕尚未確認，請等候辨識完成。")
             if row["revision"] != revision:
                 raise ValueError("這段文字已在其他畫面修改，請重新載入後再儲存。")
+            previous=self.db.execute('SELECT original_text FROM correction_history WHERE segment_id=?',(segid,)).fetchone()
+            baseline=self.db.execute('SELECT text FROM asr_baselines WHERE segment_id=?',(segid,)).fetchone()
+            original=previous[0] if previous else baseline[0] if baseline else row['text']
+            if text != row['text']:
+                # A human undoing an automatic replacement disables that rule.
+                for term in self.remembered_terms():
+                    if term['active'] and term['source'] in original and term['source'] in text and term['target'] in row['text'] and term['target'] not in text:
+                        self.db.execute('INSERT OR IGNORE INTO disabled_correction_terms VALUES (?)',(term['source'],))
+                self.db.execute('''INSERT INTO correction_history VALUES (?,?,?,?,?)
+                    ON CONFLICT(segment_id) DO UPDATE SET corrected_text=excluded.corrected_text,updated_at=excluded.updated_at''',
+                    (segid,sid,original,text,now()))
+                # Recompute from the ASR baseline, not the previous auto-save.
+                # Superseded partial edits therefore stop affecting later ASR.
+                self.db.execute('DELETE FROM correction_terms WHERE segment_id=?',(segid,))
+                if self.remember_enabled():
+                    self.db.executemany('INSERT INTO correction_terms VALUES (?,?,?,?)',
+                        [(segid,p['source'],p['target'],now()) for p in term_changes(original,text)])
             self.db.execute("""UPDATE segments SET text=?,status='human_corrected',locked=1,
                 revision=revision+1,updated_at=? WHERE id=?""", (text, now(), segid))
             return self.get(sid, segid)

@@ -1,0 +1,51 @@
+// Against tests/memory-ui-server.py: API, SQLite and UI are real; no microphone.
+const {chromium}=require('../work/node_modules/playwright');
+const assert=require('node:assert/strict');
+const fs=require('node:fs/promises');
+(async()=>{
+  const base=process.env.UI_BASE_URL||'http://127.0.0.1:8012';
+  const browser=await chromium.launch({channel:'msedge',headless:true});
+  const page=await browser.newPage({viewport:{width:1440,height:1050}});
+  const errors=[];page.on('pageerror',e=>errors.push(e.message));
+  try {
+    await page.goto(base);await page.locator('#start:enabled').waitFor();
+    const ids=await page.locator('.segment').evaluateAll(rows=>rows.map(r=>r.dataset.id));
+    assert.equal(ids.length,2);
+    const corrected='今天討論身心障礙者與小兒麻痺。';
+    const first=page.locator(`[data-id="${ids[0]}"] .segment-text`);
+    await first.click();await first.fill(corrected);
+    await page.locator(`[data-id="${ids[0]}"].human_corrected`).waitFor();
+    await page.waitForFunction(()=>document.querySelectorAll('.remembered-term').length===2);
+    await first.press('Tab');await page.locator('#settings-toggle').click();
+    await page.locator('#remembered-terms').scrollIntoViewIfNeeded();
+    const target=page.locator('.remembered-term').filter({hasText:'神性障礙者 → 身心障礙者'});
+    await target.getByRole('button',{name:'停用',exact:true}).click();
+    await target.getByRole('button',{name:'啟用',exact:true}).waitFor();
+    await page.locator('#glossary-text').fill('手動詞 → 手動替換');
+    await page.locator('#settings-close').click();
+    const second=page.locator(`[data-id="${ids[1]}"] .segment-text`);
+    await second.click();await second.fill(corrected);
+    await page.locator(`[data-id="${ids[1]}"].human_corrected`).waitFor();
+    await second.press('Tab');await page.locator('#settings-toggle').click();
+    assert.equal(await page.locator('#glossary-text').inputValue(),'手動詞 → 手動替換');
+    await page.locator('#glossary-save').click();
+    await page.waitForFunction(()=>document.getElementById('glossary-status').textContent.startsWith('已儲存 1 組'));
+    await page.reload();await page.locator('#start:enabled').waitFor();
+    await page.locator('#settings-toggle').click();
+    await page.locator('#remembered-terms').scrollIntoViewIfNeeded();
+    assert.equal(await page.locator('.remembered-term').count(),2);
+    await page.locator('.remembered-term').filter({hasText:'神性障礙者 → 身心障礙者'}).getByRole('button',{name:'啟用',exact:true}).waitFor();
+    await page.locator('.glossary-panel details summary').click();
+    const download=page.waitForEvent('download');
+    await page.locator('a[href="/api/correction-memory/export"]').click();
+    const data=JSON.parse(await fs.readFile(await (await download).path(),'utf8'));
+    assert.equal(data.history.length,2);assert.equal(data.model_trained,false);
+    await page.screenshot({path:'work/correction-memory-desktop.png'});
+    await page.setViewportSize({width:390,height:844});
+    await page.locator('#remembered-terms').scrollIntoViewIfNeeded();
+    assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
+    await page.screenshot({path:'work/correction-memory-mobile.png'});
+    assert.deepEqual(errors,[]);
+    console.log('PASS: small edits -> automatic terms -> disable -> persistence -> history export; unsaved manual glossary preserved; mobile layout');
+  } finally {await browser.close();}
+})().catch(e=>{console.error(e);process.exitCode=1;});

@@ -79,6 +79,38 @@ async function loadGlossary() {
   $('glossary-text').value=data.entries.map(entry=>`${entry.source} → ${entry.target}`).join('\n');
   $('glossary-status').textContent=`已儲存 ${data.entries.length} 組 · 只替換明確指定的錯詞`;
 }
+async function loadCorrectionMemory() {
+  const data=await api('/api/correction-memory');
+  $('remember-corrections').checked=data.enabled??true;
+  const terms=data.terms||[], history=data.history||[];
+  $('correction-memory-status').textContent=`已記住 ${terms.length} 組 · ${terms.filter(t=>t.active).length} 組自動套用`;
+  $('remembered-terms').replaceChildren();
+  for (const term of terms) {
+    const item=node('div','remembered-term');
+    item.append(node('p','',`${term.source} → ${term.target}`));
+    item.append(node('small','',term.conflict ? '有不同改法，暫停套用；可在下方手動指定。' : term.manual_override ? '依手動詞彙表優先套用' : term.active ? `已啟用 · ${term.examples} 次修正` : '已停用'));
+    const button=node('button','',term.enabled?'停用':'啟用');
+    button.disabled=term.conflict;
+    button.onclick=async()=>{
+      button.disabled=true;
+      try {await api('/api/correction-memory/terms',{method:'PATCH',body:JSON.stringify({source:term.source,enabled:!term.enabled})});await loadCorrectionMemory();}
+      catch(error){notice(error.message);button.disabled=false;}
+    };
+    item.append(button);$('remembered-terms').append(item);
+  }
+  $('correction-history').replaceChildren();
+  for (const correction of history.slice(0,30)) {
+    const item=node('div','correction-history-item');
+    item.append(node('p','',`原文：${correction.original_text}`),node('p','',`修正：${correction.corrected_text}`));
+    $('correction-history').append(item);
+  }
+}
+$('remember-corrections').onchange=async()=>{
+  const input=$('remember-corrections');input.disabled=true;
+  try {await api('/api/correction-memory',{method:'PUT',body:JSON.stringify({enabled:input.checked})});await loadCorrectionMemory();}
+  catch(error){input.checked=!input.checked;notice(error.message);}
+  finally{input.disabled=false;}
+};
 $('glossary-save').onclick=async()=>{
   const button=$('glossary-save'); button.disabled=true;
   try {
@@ -279,6 +311,7 @@ async function saveEdit(edit) {
     const updated = await api(`/api/sessions/${edit.sid}/segments/${edit.id}`,{method:'PATCH',body:JSON.stringify({text,revision:edit.revision})});
     edit.revision=updated.revision; edit.original=updated.text; edit.conflict=false;
     upsert(updated); notice();
+    loadCorrectionMemory().catch(()=>notice('修改已儲存，修正詞彙表暫時無法重新載入。'));
   } catch(error) {
     edit.conflict=true; notice(error.message + ' 你的修改仍在原句；請先複製文字再取消或重新載入。');
   } finally {
@@ -470,6 +503,7 @@ setInterval(async () => {
 try {
   await refreshMicrophones().catch(() => {});
   await loadGlossary();
+  await loadCorrectionMemory();
   const health = await api('/api/health'); $('model').textContent = `${health.label || 'Whisper'} ${health.model} · ${health.device.toUpperCase()}`;
   const rows = await loadSessions(), stored = localStorage.getItem('caption-session');
   if (rows.length) await openSession(rows.some(r => r.id === stored) ? stored : rows[0].id);

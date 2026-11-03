@@ -45,6 +45,14 @@ class GlossaryInput(BaseModel):
     entries: list[GlossaryEntry] = Field(max_length=500)
 
 
+class MemorySetting(BaseModel):
+    enabled: bool
+
+
+class RememberedTerm(MemorySetting):
+    source: str = Field(min_length=1,max_length=100)
+
+
 def same_origin(origin, host):
     if not origin:
         return True  # Local command-line clients do not send Origin.
@@ -114,6 +122,31 @@ def create_app(db_path=None, engine=None):
         ):
             raise HTTPException(422,"錯詞不能重複；詞彙需去除頭尾空白，且不能相同或包含換行／Tab。")
         return {"entries":store.save_glossary(body.entries)}
+
+    @app.get('/api/correction-memory')
+    def correction_memory():
+        return {'enabled':store.remember_enabled(),'terms':store.remembered_terms(),
+                'history':store.correction_history()}
+
+    @app.put('/api/correction-memory')
+    def set_correction_memory(body: MemorySetting):
+        store.set_remember_enabled(body.enabled)
+        return {'enabled':store.remember_enabled()}
+
+    @app.patch('/api/correction-memory/terms')
+    def set_remembered_term(body: RememberedTerm):
+        try:
+            store.set_remembered_term(body.source,body.enabled)
+        except KeyError:
+            raise HTTPException(404,'找不到這筆已記住的詞語。')
+        return {'terms':store.remembered_terms()}
+
+    @app.get('/api/correction-memory/export')
+    def export_correction_memory():
+        result={'terms':store.remembered_terms(),'history':store.correction_history(limit=100000),
+                'whole_segments_human_verified':False,'model_trained':False}
+        return Response(json.dumps(result,ensure_ascii=False,indent=2),media_type='application/json',
+            headers={'Content-Disposition':'attachment; filename="correction-memory.json"'})
 
     @app.post("/api/sessions", status_code=201)
     def new_session(body: SessionInput):

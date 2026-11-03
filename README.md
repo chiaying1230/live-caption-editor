@@ -79,6 +79,14 @@ macOS / Linux 將 `.\.venv\Scripts\python.exe` 換成 `.venv/bin/python`，必�
 
 ## 糾正字彙表與訓練資料
 
+### 改字自動記住
+
+「設定與紀錄 → 我的修正詞彙表」預設開啟自動記憶。直接改字並儲存後，程式比較原始辨識與最新修改，只改一兩個字也會以本機中文詞典斷詞並帶入上下文，擷取成詞語或較長短句。例如「神性障礙者 → 身心障礙者」、「小額麻痺 → 小兒麻痺」、「知持 → 支持」。使用 [jieba](https://github.com/fxsjy/jieba) 的詞語位置，停用未登錄詞的猜測；為斷詞暫時轉換字形，保存的仍是原本繁體字。**詞典斷詞不能保證詞界或語意正確。** 詞彙表會顯示實際記住的範圍，可逐筆停用。字典不認識或無法明確對齊的修改留在紀錄，可用手動詞彙補充。
+
+新學到的詞只作用於之後的 AI 字幕；人工已修改的內容仍鎖定。標點、數字、代名詞、單純補字／刪字，以及大幅整句改寫會留在修正紀錄，不直接形成替換規則。連續自動儲存會依原始辨識重算，更新或撤回尚未完成的詞語；若同一錯詞有不同改法，先暫停自動套用，手動詞彙表可指定優先答案。人工改回被自動替換的原詞時，該自動規則會停用。
+
+取消「自動記住」會停止新增詞語規則，既有詞語可各自停用；修正紀錄仍會保存。修正詞彙、歷史與開關保存在該服務的本機 SQLite，重啟後保留。可匯出修正紀錄 JSON。這不會訓練語音模型，局部改字也不代表整個音訊片段已逐字校對，不會自動把它當成正確訓練標註。
+
 已實測候選模型與公開語料訓練，結果及限制見 [MODEL_COMPARISON.md](MODEL_COMPARISON.md)。
 
 已增加可在本機執行的 CPU LoRA 小規模試驗工具，資料格式、獨立測試集與選模規則見 [TRAINING.md](TRAINING.md)。它不會自動替換正式服務，也不代表已證明跨課程泛化。
@@ -160,6 +168,9 @@ Confirmed segment editor -> HTTP PATCH + revision check -> SQLite
 | `GET /api/health` | 模型設定／載入狀態與收音忙碌狀態 |
 | `GET/POST /api/sessions` | 列出／建立聽打 |
 | `GET /api/sessions/{sid}` | 讀取場次與全部字幕 |
+| `GET/PUT /api/correction-memory` | 自動記住的詞彙／修正紀錄；設定是否新增詞彙 |
+| `PATCH /api/correction-memory/terms` | `{source, enabled}`，啟用／停用一筆自動詞彙 |
+| `GET /api/correction-memory/export` | 下載修正詞彙與紀錄 JSON |
 | `GET /api/sessions/{sid}/recordings` | 該場次的錄音清單與時間戳 |
 | `GET /api/sessions/{sid}/recordings/{rid}/audio` | 停止後回放 WAV；加 `?download=true` 下載 |
 | `PATCH /api/sessions/{sid}/segments/{id}` | `{text, revision}`，人工校正並鎖定 |
